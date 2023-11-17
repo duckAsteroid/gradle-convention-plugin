@@ -1,0 +1,12 @@
+name: Purge packages from GitHub Packages
+on: workflow_dispatch
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Purge older packages
+        uses: actions/delete-package-versions@v4
+        with:
+          package-name: io.github.duckasteroid.conventions.gradle-conventions-plugin
+          package-type: 'maven'
+          min-versions-to-keep: 2
