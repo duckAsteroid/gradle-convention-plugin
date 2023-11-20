@@ -1,0 +1,44 @@
+plugins {
+    id 'groovy-gradle-plugin'
+    id 'com.gradle.plugin-publish' version '1.1.0'
+    id "com.github.ben-manes.versions" version "0.49.0"
+}
+
+group = 'io.github.duckasteroid.conventions'
+version = '1.0'
+
+repositories {
+    gradlePluginPortal() // so that external plugins can be resolved in dependencies section
+}
+
+publishing {
+    repositories {
+        maven {
+            name = "Repo"
+            // change to point to your repo, e.g. http://my.org/repo
+            url = layout.buildDirectory.dir("repo")
+        }
+        maven {
+            name = "GitHubPackages"
+            url = "https://maven.pkg.github.com/cognitranlimited/products-gradle-plugins"
+            credentials {
+                username = System.getenv("GITHUB_ACTOR")
+                password = System.getenv("GITHUB_TOKEN")
+            }
+        }
+        mavenLocal()
+    }
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.3.1'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.3.1'
+}
+
+test {
+    useJUnitPlatform();
+}
+
+tasks.named('publish') {
+    dependsOn('check')
+}
