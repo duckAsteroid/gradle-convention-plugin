@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'io.github.duckasteroid.conventions'
-version = '1.0'
+version = '0.0.1-RC1'
 
 repositories {
     gradlePluginPortal() // so that external plugins can be resolved in dependencies section
