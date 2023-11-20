@@ -20,7 +20,7 @@ publishing {
         }
         maven {
             name = "GitHubPackages"
-            url = "https://maven.pkg.github.com/cognitranlimited/products-gradle-plugins"
+            url = "https://maven.pkg.github.com/duckAsteroid/gradle-convention-plugin"
             credentials {
                 username = System.getenv("GITHUB_ACTOR")
                 password = System.getenv("GITHUB_TOKEN")
