@@ -1,3 +1,5 @@
+# Manual only (workflow_dispatch) — package versions are never purged automatically, only when
+# someone explicitly runs this from the Actions tab.
 name: Purge packages from GitHub Packages
 on: workflow_dispatch
 jobs:
@@ -7,6 +9,9 @@ jobs:
       - name: Purge older packages
         uses: actions/delete-package-versions@v4
         with:
+          # Must match the group ('io.github.duckasteroid.conventions', from build.gradle) and
+          # rootProject.name ('gradle-conventions-plugin', from settings.gradle) — update this if
+          # either changes.
           package-name: io.github.duckasteroid.conventions.gradle-conventions-plugin
           package-type: 'maven'
           min-versions-to-keep: 2

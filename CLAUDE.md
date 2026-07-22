@@ -70,5 +70,11 @@ just `v{number}`). Don't hardcode versions in `build.gradle`; a release is made 
 ```
 
 CI (`.github/workflows/build-java.yml`) runs `./gradlew build` on pushes to `feature/**`, `develop`, `release`,
-`main` using Temurin JDK 20. `.github/workflows/publish.yml` runs `./gradlew publish` on GitHub release creation.
-There is no separate lint-only command; checkstyle/pmd run as part of `build`/`check`.
+`main` using Temurin JDK 20. There is no separate lint-only command.
+
+**Releases are controlled entirely by git tags.** Pushing a tag matching `v*` triggers
+`.github/workflows/publish.yml`, which creates a GitHub Release from that tag (`gh release create`) and then runs
+`./gradlew publish` in the *same job*. Both steps deliberately run in one workflow/job rather than as two workflows
+chained via the `release: created` event — a workflow run triggered by the default `GITHUB_TOKEN` does not trigger
+other workflows, so a separate release-creation workflow would silently fail to kick off the publish step. Don't
+split this back into two workflows without switching the release-creation step to a PAT.

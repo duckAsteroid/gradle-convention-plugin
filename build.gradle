@@ -14,8 +14,6 @@ java {
 group = 'io.github.duckasteroid.conventions'
 version = scmVersion.version
 
-System.out.println("Version=${version}")
-
 gradlePlugin {
     vcsUrl = 'https://github.com/duckAsteroid/gradle-convention-plugin'
 }

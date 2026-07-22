@@ -4,6 +4,8 @@
 # documentation.
 name: Perform a basic build and test
 
+# CI only — this does not publish anything. Publishing is handled separately by publish.yml,
+# triggered by pushing a version tag (see that file for details).
 on:
   push:
     branches:
