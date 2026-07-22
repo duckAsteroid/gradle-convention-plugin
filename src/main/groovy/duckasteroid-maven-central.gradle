@@ -1,0 +1,29 @@
+// Opt-in convention for projects that need to publish to Maven Central (OSSRH).
+// Apply alongside 'duckasteroid-java'; requires its 'maven-publish' setup (mavenJava
+// publication) to already be present.
+plugins {
+    id 'signing'
+}
+
+publishing {
+    // add the Maven OSSRH repository
+    repositories {
+        maven {
+            name = 'OSSRH'
+            // Release and snapshots have different URLs
+            def releasesRepoUrl = 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
+            def snapshotsRepoUrl = 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
+            url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
+            // use project properties to pick up user/pass for repo
+            credentials {
+                username = project.hasProperty('ossrhUsername') ?  ossrhUsername : "undefined"
+                password = project.hasProperty('ossrhPassword') ?  ossrhPassword : "undefined"
+            }
+        }
+    }
+}
+
+// All JARs published to Maven central must be signed
+signing {
+    sign publishing.publications.mavenJava
+}

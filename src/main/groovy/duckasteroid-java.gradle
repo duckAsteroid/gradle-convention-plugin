@@ -1,12 +1,16 @@
 import org.gradle.api.JavaVersion
 import org.gradle.api.publish.maven.MavenPublication
+import org.eclipse.jgit.lib.RepositoryBuilder
 
 plugins {
     id 'java'
     id 'maven-publish'
-    id 'signing'
     id 'pl.allegro.tech.build.axion-release'
     id 'com.github.ben-manes.versions'
+    // Registers the `gitHubPackages { owner = ...; repo = ... }` DSL for use in this
+    // project's own dependency-resolution `repositories { }` block. Not invoked here -
+    // no default resolve repository is added. Consumers add as many of their own
+    // gitHubPackages { } entries as they need, for whichever repos host their dependencies.
     id 'io.github.duckasteroid.github-packages'
 }
 
@@ -66,8 +70,35 @@ artifacts {
 
 
 
+// Derive the GitHub owner/repo/branch for the POM's project and SCM URLs from the
+// consuming project's actual 'origin' remote, rather than assuming repo name ==
+// rootProject.name and branch == master. Falls back to those old assumptions if
+// this isn't a real git checkout (e.g. an in-memory ProjectBuilder test project).
+def ghOwner = 'duckAsteroid'
+def ghRepo = rootProject.name
+def ghBranch = 'main'
+try {
+    def gitRepository = new RepositoryBuilder().readEnvironment().findGitDir(rootProject.projectDir).build()
+    def originUrl = gitRepository.config.getString('remote', 'origin', 'url')
+    def originMatch = originUrl ? (originUrl =~ /github\.com[:\/]([^\/]+)\/(.+?)(\.git)?$/) : null
+    if (originMatch?.find()) {
+        ghOwner = originMatch.group(1)
+        ghRepo = originMatch.group(2)
+    }
+    if (gitRepository.branch) {
+        ghBranch = gitRepository.branch
+    }
+    gitRepository.close()
+} catch (Exception ignored) {
+    // Not a git checkout (or no 'origin' remote) - keep the fallback values above
+}
+
+// Exposed for other duckasteroid-* convention plugins (e.g. duckasteroid-github-packages-self)
+// that want to target this project's own GitHub repo instead of a hardcoded one.
+project.ext.ghOwner = ghOwner
+project.ext.ghRepo = ghRepo
+
 // Configure the publication so that all appropriate meta data ends up in the POM
-// as required by Maven central
 publishing {
     publications {
         mavenJava(MavenPublication) {
@@ -75,7 +106,7 @@ publishing {
             pom {
                 name = project.name
                 //description = "Project ${getProject().path}"
-                url = "http://duckasteroid.github.io/${rootProject.name}/"
+                url = "https://github.com/${ghOwner}/${ghRepo}"
                 licenses {
                     license {
                         name = 'The Apache License, Version 2.0'
@@ -83,9 +114,9 @@ publishing {
                     }
                 }
                 scm {
-                    connection = "scm:git:git://github.com/duckAsteroid/${rootProject.name}.git"
-                    developerConnection = "scm:git:ssh://github.com:duckAsteroid/${rootProject.name}.git"
-                    url ="https://github.com/duckAsteroid/${rootProject.name}/tree/master"
+                    connection = "scm:git:git://github.com/${ghOwner}/${ghRepo}.git"
+                    developerConnection = "scm:git:ssh://github.com:${ghOwner}/${ghRepo}.git"
+                    url = "https://github.com/${ghOwner}/${ghRepo}/tree/${ghBranch}"
                 }
                 developers {
                     developer {
@@ -97,28 +128,6 @@ publishing {
             }
         }
     }
-    // add the Maven OSSRH repositories
-    repositories {
-        maven {
-            name = 'OSSRH'
-            // Release and snapshots have different URLs
-            def releasesRepoUrl = 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
-            def snapshotsRepoUrl = 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
-            url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
-            // use project properties to pick up user/pass for repo
-            credentials {
-                username = project.hasProperty('ossrhUsername') ?  ossrhUsername : "undefined"
-                password = project.hasProperty('ossrhPassword') ?  ossrhPassword : "undefined"
-            }
-        }
-        gitHubPackages {
-            owner = "duckAsteroid"
-            repo = rootProject.name
-        }
-    }
-}
-
-// All JARs published to Maven central must be signed
-signing {
-    sign publishing.publications.mavenJava
+    // No publish repository is configured by default - apply an opt-in plugin such as
+    // duckasteroid-github-packages or duckasteroid-github-packages-self to add one.
 }

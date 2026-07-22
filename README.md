@@ -15,10 +15,14 @@ The base convention plugin for Java projects. Apply it via `id 'duckasteroid-jav
   * Useful tasks: `./gradlew currentVersion` shows the computed version for a project; `./gradlew release` tags the repo with the next version (or push a matching git tag yourself)
 * Maven Central repository for dependencies
 * Add source and JavaDoc to the published artifacts
-* Maven publishing to 
-  * Maven Central as `OSSRH`
-  * GitHub Packages as `GitHubPackages`, configured via my [gradle-github-packages](https://github.com/duckAsteroid/gradle-github-packages) plugin
+* Registers the `gitHubPackages { owner = '...'; repo = '...' }` DSL (via my [gradle-github-packages](https://github.com/duckAsteroid/gradle-github-packages)
+  plugin) for use in your own `repositories { }` block, so you can resolve dependencies from as many GitHub
+  Packages feeds as you need. Nothing is added by default — you opt in per repo, explicitly
 * Dependency update checking via the `com.github.ben-manes.versions` plugin (run `./gradlew dependencyUpdates`)
+
+No publish repository is configured by default — not even GitHub Packages — so a project applying only
+`duckasteroid-java` can only `publishToMavenLocal`. Add one of the opt-in plugins below for an actual publish
+target.
 
 ## Opt-in plugins
 
@@ -28,3 +32,10 @@ These are not applied by `duckasteroid-java` — apply them alongside it if you 
 * `duckasteroid-jacoco` — applies `jacoco`
 * `duckasteroid-pmd` — applies `pmd`
 * `duckasteroid-lombok` — applies the [Freefair Lombok plugin](https://github.com/freefair/gradle-plugins) (`io.freefair.lombok`)
+* `duckasteroid-maven-central` — for projects that also need to publish to Maven Central. Adds the `signing` plugin,
+  signs the `mavenJava` publication, and adds the `OSSRH` publishing repository (staging/snapshot URLs picked based
+  on whether the version ends in `SNAPSHOT`, credentials from the `ossrhUsername`/`ossrhPassword` project properties).
+  Not needed for GitHub-Packages-only projects — signing keys and Central are otherwise required for every publish.
+* `duckasteroid-github-packages` — publish to duckAsteroid's own GitHub Packages feed.
+* `duckasteroid-github-packages-self` — publish to *this* project's own GitHub Packages feed (owner/repo derived
+  from its git `origin` remote).

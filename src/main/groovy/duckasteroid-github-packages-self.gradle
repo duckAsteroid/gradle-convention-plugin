@@ -1,0 +1,14 @@
+// Opt-in: publish to *this* project's own GitHub Packages feed (owner/repo derived
+// from its git 'origin' remote by duckasteroid-java, which must apply first).
+plugins {
+    id 'io.github.duckasteroid.github-packages'
+}
+
+publishing {
+    repositories {
+        gitHubPackages {
+            owner = project.ghOwner
+            repo = project.ghRepo
+        }
+    }
+}
