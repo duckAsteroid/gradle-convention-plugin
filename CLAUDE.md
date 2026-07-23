@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A set of Gradle plugins (precompiled script plugins, written in Groovy) that provide shared build conventions for
 the author's other projects. Consumers apply them by ID, e.g. `id 'duckasteroid-java'`, instead of copy-pasting
-build logic. Every plugin here is scoped to the author's own (`duckAsteroid`) projects — e.g. the GitHub Packages
-repo is hardcoded to owner `duckAsteroid` — this is not a general-purpose third-party plugin suite.
+build logic. This is not a general-purpose third-party plugin suite — group `io.github.duckasteroid`, POM
+developer metadata, etc. are all specific to the author.
 
 The repo builds *itself* with `pl.allegro.tech.build.axion-release`, so the root `build.gradle` is both the build
 of this plugin project and (via `groovy-gradle-plugin`) the mechanism that compiles `src/main/groovy/*.gradle`
@@ -37,8 +37,8 @@ The convention plugins are split so consumers can opt into only what they want, 
     see its own repo for details). Applied here **only** to register the `gitHubPackages { owner = ...; repo = ... }`
     DSL for consumers to use in their own dependency-resolution `repositories { }` block — no repository is added
     by default, and consumers can add as many `gitHubPackages { }` entries as they need for whichever repos host
-    their dependencies. Actually *publishing* to GitHub Packages is opt-in — see `duckasteroid-github-packages` /
-    `duckasteroid-github-packages-self` below.
+    their dependencies. Actually *publishing* to GitHub Packages is opt-in — see
+    `duckasteroid-github-packages-publish` below.
   - `mavenCentral()` + `mavenLocal()` repositories for dependency resolution, source/Javadoc jar generation. No
     publish repository is configured by default — not even GitHub Packages — so applying just `duckasteroid-java`
     leaves `publish` with nothing to push to except `mavenLocal`. Maven Central/OSSRH publishing+signing and
@@ -53,7 +53,7 @@ The convention plugins are split so consumers can opt into only what they want, 
     only when there's no real git checkout to read (e.g. `JavaConventionsPluginTest`'s in-memory `ProjectBuilder`
     project) so the fallback never fires for a real consumer.
   - The derived owner/repo are also exposed as `project.ghOwner` / `project.ghRepo` (via `project.ext`) so other
-    duckasteroid-* convention plugins applied alongside this one (e.g. `duckasteroid-github-packages-self`) can
+    duckasteroid-* convention plugins applied alongside this one (e.g. `duckasteroid-github-packages-publish`) can
     reuse them without recomputing.
   - `publish` depends on `check`, so publishing always runs verification first (`build.gradle:63-65`)
 - `duckasteroid-checkstyle.gradle`, `duckasteroid-jacoco.gradle`, `duckasteroid-pmd.gradle` — thin opt-in plugins,
@@ -65,15 +65,17 @@ The convention plugins are split so consumers can opt into only what they want, 
   snapshot URL picked based on whether `version` ends in `SNAPSHOT`; credentials from the `ossrhUsername`/
   `ossrhPassword` project properties). Apply alongside `duckasteroid-java`, which must already have created the
   `mavenJava` publication.
-- `duckasteroid-github-packages.gradle` / `duckasteroid-github-packages-self.gradle` — opt-in plugins to publish
-  to GitHub Packages: the former to duckAsteroid's own feed (hardcoded `owner = "duckAsteroid"`, `repo =
-  rootProject.name`), the latter to the consuming project's own feed (`project.ghOwner` / `project.ghRepo`, as
-  derived above). Both rely on `io.github.duckasteroid.github-packages` v0.2.0+ (pinned in the root `build.gradle`
-  dependency), which fixed [gradle-github-packages#3](https://github.com/duckAsteroid/gradle-github-packages/issues/3)
-  — earlier versions had the `gitHubPackages { }` closure always target `project.repositories` regardless of which
-  `repositories { }` block it was invoked in, so calling it inside `publishing.repositories { }` silently added the
-  repo to the wrong list and `publish` pushed nowhere. Verified working end-to-end with a scratch consumer project
+- `duckasteroid-github-packages-publish.gradle` — opt-in plugin to publish to *this* project's own GitHub Packages
+  feed (`project.ghOwner` / `project.ghRepo`, as derived above — not a hardcoded owner). Relies on
+  `io.github.duckasteroid.github-packages` v0.2.0+ (pinned in the root `build.gradle` dependency), which fixed
+  [gradle-github-packages#3](https://github.com/duckAsteroid/gradle-github-packages/issues/3) — earlier versions
+  had the `gitHubPackages { }` closure always target `project.repositories` regardless of which `repositories { }`
+  block it was invoked in, so calling it inside `publishing.repositories { }` silently added the repo to the wrong
+  list and `publish` pushed nowhere. Verified working end-to-end with a scratch consumer project
   (`publishMavenJavaPublicationToGitHubPackages-<repo>Repository` task appears, targeting the correct derived URL).
+  (There used to be a separate duckAsteroid-hardcoded `duckasteroid-github-packages.gradle` alongside a
+  self-targeting `duckasteroid-github-packages-self.gradle` — merged into just this one file, renamed to
+  `-publish` to describe what it does, since the hardcoded variant wasn't needed.)
 - `src/test/java/JavaConventionsPluginTest.java` — uses `ProjectBuilder` + Gradle TestKit to apply the plugin to
   an in-memory project and assert specific plugins/config landed, rather than a full end-to-end build.
 - `build.gradle` (root) — builds the plugin JAR itself: applies `groovy-gradle-plugin`, `com.gradle.plugin-publish`,

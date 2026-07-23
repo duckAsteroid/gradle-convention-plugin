@@ -36,6 +36,5 @@ These are not applied by `duckasteroid-java` — apply them alongside it if you 
   signs the `mavenJava` publication, and adds the `OSSRH` publishing repository (staging/snapshot URLs picked based
   on whether the version ends in `SNAPSHOT`, credentials from the `ossrhUsername`/`ossrhPassword` project properties).
   Not needed for GitHub-Packages-only projects — signing keys and Central are otherwise required for every publish.
-* `duckasteroid-github-packages` — publish to duckAsteroid's own GitHub Packages feed.
-* `duckasteroid-github-packages-self` — publish to *this* project's own GitHub Packages feed (owner/repo derived
+* `duckasteroid-github-packages-publish` — publish to *this* project's own GitHub Packages feed (owner/repo derived
   from its git `origin` remote).
