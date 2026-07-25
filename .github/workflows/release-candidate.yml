@@ -1,0 +1,56 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+# Auto-bumps the release-candidate number on every push to `release`: tagReleaseCandidate derives
+# the candidate version from conventional commits since the last final release (or picks up
+# release.forceVersion if set), mints the next -RCn tag, and this job then cuts a GitHub
+# pre-release and publishes it - all in the same job.
+#
+# Deliberately self-contained rather than relying on the tag push to trigger publish.yml: a tag
+# pushed with the default GITHUB_TOKEN does not trigger other workflow runs (see publish.yml's own
+# comments), so chaining into it here would silently never fire.
+name: Tag and publish a release candidate
+on:
+  push:
+    branches:
+      - release
+jobs:
+  release-candidate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed to create the tag/GitHub Release
+      packages: write # needed to publish to GitHub Packages
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full tag + commit history needed to derive the version
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '20'
+          distribution: 'temurin'
+      - name: Validate Gradle wrapper
+        uses: gradle/wrapper-validation-action@v1
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Tag next release candidate
+        run: ./gradlew tagReleaseCandidate
+
+      - name: Determine tag
+        id: tag
+        run: echo "name=$(git describe --tags --exact-match HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ steps.tag.outputs.name }}" --generate-notes --prerelease
+
+      - name: Publish package
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

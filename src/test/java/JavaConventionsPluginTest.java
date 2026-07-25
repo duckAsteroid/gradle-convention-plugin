@@ -16,4 +16,11 @@ public class JavaConventionsPluginTest {
     // assertTrue(project.getPluginManager().hasPlugin("jacoco"), "JaCoCo plugin should be applied");
     System.out.println("Applied plugins: " + project.getPluginManager());
   }
+
+  @Test
+  public void exposesTagPrefixForOtherConventionPluginsToReuse() {
+    Project project = ProjectBuilder.builder().withName("test").build();
+    project.getPluginManager().apply("duckasteroid-java");
+    assertEquals("v", project.getExtensions().getExtraProperties().get("tagPrefix"));
+  }
 }

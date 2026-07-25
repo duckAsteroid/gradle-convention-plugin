@@ -7,12 +7,31 @@ The base convention plugin for Java projects. Apply it via `id 'duckasteroid-jav
 
 * Java 25 toolchain by default, overridable via `-Pduckasteroid.java.version` (or a `gradle.properties` entry)
 * Group `io.github.duckasteroid`
-* Versioning using git tags, via the [`axion-release`](https://github.com/allegro/axion-release-plugin) plugin (as explained in my Medium article) — no version string is ever committed to `build.gradle`
+* Versioning derived entirely from git — no version string is ever committed to `build.gradle`
   * The expected tag prefix is derived from the Gradle project path, so each project's version is `${gradle project path}/v{number}`. For example a subproject at `:sub:module` looks for tags like `sub/module/v1.2.3`, while the root project just looks for `v1.2.3`
   * This makes versioning **multi-module friendly**: each module in a multi-project build can be tagged and released independently, without bumping the version of unrelated modules in the same repo
-  * If no tag matches a subproject's own prefix yet, it falls back to a plain `v` prefix tag at the repo root, and finally to `0.0.0+notag` if no matching tag exists at all
-  * Between tags, axion-release computes a version like `0.0.2-develop-SNAPSHOT` — the next patch version, the current branch name, and a `SNAPSHOT` suffix — until the next matching tag is pushed
-  * Useful tasks: `./gradlew currentVersion` shows the computed version for a project; `./gradlew release` tags the repo with the next version (or push a matching git tag yourself)
+    * A module with no tag of its own yet falls back to the root project's plain `v` tag as its starting point
+      (rather than starting over at `0.0.0`), mirroring axion-release's own `fallbackPrefixes`
+    * Only commits that actually touched the module's own directory count towards its version bump (equivalent
+      to `git log -- <module path>`) — a `feat:` commit in a sibling module doesn't bump this module's minor
+      version
+  * The version itself is computed by a small built-in port of the semantic-release
+    [`commit-analyzer`](https://github.com/semantic-release/commit-analyzer) concept: find the last final release tag
+    (a plain `vX.Y.Z`, no suffix) reachable from `HEAD` (falling back per module as above), then look at the
+    [Conventional Commits](https://www.conventionalcommits.org/) messages since that tag that touched this module —
+    `fix:`/`perf:` bump the patch number, `feat:` bumps minor, and a `!` marker (e.g. `feat!:`) or a
+    `BREAKING CHANGE:` footer bumps major, with the highest bump across all the qualifying commits winning. So
+    `1.0.0` + a `feat:` commit computes as `1.1.0`, decorated `1.1.0-SNAPSHOT` for ordinary builds unless `HEAD`
+    sits exactly on a real tag (feature branches get their sanitized branch name folded in too, e.g.
+    `1.0.1-cool-stuff-SNAPSHOT`). This works identically on any branch — `develop`, a feature branch, or `main`
+    between releases — and survives squash-merges for free, since GitHub's squash commit message defaults to the PR
+    title, so the convention rides along on whichever commit actually lands.
+  * `-Prelease.forceVersion=X.Y.Z` remains the ultimate backstop, exactly as documented by axion-release
+    ([force_version docs](https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/)): if
+    set, none of the above analysis runs at all and the version is used verbatim.
+  * Useful tasks: `./gradlew currentVersion` shows axion-release's own (unrelated) tag-based computation; the
+    project's actual `version` is printed by any normal task, e.g. `./gradlew properties -q | grep '^version:'`.
+    See `duckasteroid-release-flow` below for minting actual release tags.
 * Maven Central repository for dependencies
 * Add source and JavaDoc to the published artifacts
 * Registers the `gitHubPackages { owner = '...'; repo = '...' }` DSL (via my [gradle-github-packages](https://github.com/duckAsteroid/gradle-github-packages)
@@ -38,3 +57,12 @@ These are not applied by `duckasteroid-java` — apply them alongside it if you 
   Not needed for GitHub-Packages-only projects — signing keys and Central are otherwise required for every publish.
 * `duckasteroid-github-packages-publish` — publish to *this* project's own GitHub Packages feed (owner/repo derived
   from its git `origin` remote).
+* `duckasteroid-release-flow` — release-engineering tasks for a `develop`/`release` → `main` git flow, where
+  `release` accumulates release-candidate builds before an accepted RC is promoted to a final release on `main`:
+  * `tagReleaseCandidate` — tags and pushes the next `X.Y.Z-RCn` (auto-incrementing `n`), derived from the same
+    conventional-commit analysis as the ordinary build version (or `release.forceVersion` if set). Intended to run
+    on every push to `release`.
+  * `promoteReleaseCandidate` — strips the `-RCn` suffix off the nearest reachable RC tag and tags/pushes the final
+    `X.Y.Z` (or `release.forceVersion` if set). Intended to run on every push to `main`.
+  * Both are plain Gradle tasks, runnable locally as well as from CI — release engineering doesn't hard-depend on
+    GitHub Actions being available.

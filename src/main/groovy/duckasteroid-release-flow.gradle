@@ -1,0 +1,59 @@
+import io.github.duckasteroid.conventions.VersionResolver
+
+// Opt-in release-engineering tasks for the develop -> release -> main flow. Apply alongside
+// duckasteroid-java, which computes project.ext.tagPrefix that these tasks reuse. Both tasks are
+// plain Gradle tasks, runnable locally as well as from CI - release engineering shouldn't
+// hard-depend on GitHub Actions being up.
+//
+// Both respect release.forceVersion as the ultimate backstop, same as the ordinary build version
+// resolution in duckasteroid-java: if set, it's used verbatim, no commit analysis runs at all.
+// See https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/
+//
+// Task actions below capture everything they need (tagPrefix, projectDir, the forceVersion
+// property) as plain local values during task configuration, and shell out via plain
+// ProcessBuilder rather than project.exec - accessing the live Project object from a task action
+// at execution time is unsupported under the configuration cache.
+
+tasks.register('tagReleaseCandidate') {
+    group = 'release'
+    description = 'Tags and pushes the next release-candidate version (auto-incrementing RC number), ' +
+            'derived from conventional commits since the last final release, or release.forceVersion if set.'
+    def tagPrefix = project.ext.tagPrefix
+    def modulePath = project.ext.modulePath
+    def repoDir = project.projectDir
+    def forceVersion = project.findProperty('release.forceVersion')
+    doLast {
+        String candidate = forceVersion ?:
+                VersionResolver.resolveCandidateVersion(repoDir, tagPrefix, modulePath, ['v'])
+        String tag = VersionResolver.nextReleaseCandidateTag(repoDir, tagPrefix, candidate)
+        createAndPushTag(repoDir, tag)
+    }
+}
+
+tasks.register('promoteReleaseCandidate') {
+    group = 'release'
+    description = 'Strips the -RCx suffix off the current release candidate and tags/pushes the final ' +
+            'release version, or release.forceVersion if set.'
+    def tagPrefix = project.ext.tagPrefix
+    def repoDir = project.projectDir
+    def forceVersion = project.findProperty('release.forceVersion')
+    doLast {
+        String tag = forceVersion ? "${tagPrefix}${forceVersion}" : VersionResolver.promoteTag(repoDir, tagPrefix)
+        createAndPushTag(repoDir, tag)
+    }
+}
+
+def createAndPushTag(File repoDir, String tag) {
+    runGit(repoDir, 'tag', '-a', tag, '-m', "Release ${tag}")
+    runGit(repoDir, 'push', 'origin', tag)
+}
+
+def runGit(File repoDir, String... args) {
+    List<String> command = ['git'] + (args as List<String>)
+    Process process = new ProcessBuilder(command).directory(repoDir).redirectErrorStream(true).start()
+    String output = process.inputStream.getText('UTF-8')
+    int exit = process.waitFor()
+    if (exit != 0) {
+        throw new RuntimeException("git ${args.join(' ')} failed (${exit}): ${output.trim()}")
+    }
+}

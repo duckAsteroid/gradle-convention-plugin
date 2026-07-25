@@ -47,11 +47,17 @@ dependencies {
     implementation('com.github.ben-manes.versions:com.github.ben-manes.versions.gradle.plugin:0.54.0')
     implementation('io.freefair.lombok:io.freefair.lombok.gradle.plugin:9.5.0')
     implementation('io.github.duckasteroid.github-packages:io.github.duckasteroid.github-packages.gradle.plugin:0.2.0')
+    // axion-release only exposes JGit on the runtime classpath, not compile - VersionResolver
+    // (a plain class, not a precompiled script plugin) needs it directly to compile. Version
+    // pinned to what axion-release-plugin 1.21.2 already resolves transitively, to avoid a
+    // second JGit version on the classpath.
+    implementation('org.eclipse.jgit:org.eclipse.jgit:7.4.0.202509020913-r')
 
     testImplementation gradleTestKit()
     //testImplementation 'org.gradle:gradle-logging:7.6.1'
 
     testImplementation 'org.junit.jupiter:junit-jupiter-api:6.1.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params:6.1.2'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:6.1.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.1.2'
 }

@@ -1,6 +1,7 @@
 import org.gradle.api.JavaVersion
 import org.gradle.api.publish.maven.MavenPublication
 import org.eclipse.jgit.lib.RepositoryBuilder
+import io.github.duckasteroid.conventions.VersionResolver
 
 plugins {
     id 'java'
@@ -22,16 +23,21 @@ java {
     }
 }
 
-// Multi-project friendly versioning strategy
+// Custom per-module tag prefix based on Gradle path (e.g. 'sub/module/v', or plain 'v' at root).
+// Computed up front - shared by scmVersion.tag below, by the SCM-derived version resolution
+// further down, and exposed via project.ext for other duckasteroid-* convention plugins
+// (e.g. duckasteroid-release-flow) to reuse without recomputing.
+def customPrefix = "${project.path.replace(':','/')}/v"
+while (customPrefix.startsWith("/")) {
+    customPrefix = customPrefix.substring(1)
+}
+println("Project '${project.name}' custom prefix: ${customPrefix}")
+
+// Multi-project friendly versioning strategy - axion-release still owns tag discovery/creation
+// and remains the backstop for release.forceVersion (see below); it's just no longer what
+// computes project.version day-to-day.
 scmVersion {
     tag {
-        // define a custom prefix for this project based on Gradle path
-        def customPrefix = "${project.path.replace(':','/')}/v"
-        while (customPrefix.startsWith("/")) {
-            customPrefix = customPrefix.substring(1)
-        }
-        println("Project '${project.name}' custom prefix: ${customPrefix}")
-        // Expect this prefix for this project
         prefix.set(customPrefix)
         // Fallback onto root project versions
         fallbackPrefixes.set(['v'])
@@ -40,7 +46,56 @@ scmVersion {
     }
 }
 
-version = scmVersion.version
+// Derive the GitHub owner/repo/branch for the POM's project/SCM URLs (below) and for the
+// SCM-derived version resolution from the consuming project's actual 'origin' remote and
+// current branch, rather than assuming repo name == rootProject.name and branch == master.
+// Falls back to those old assumptions if this isn't a real git checkout (e.g. an in-memory
+// ProjectBuilder test project).
+def ghOwner = 'duckAsteroid'
+def ghRepo = rootProject.name
+def ghBranch = 'main'
+try {
+    def gitRepository = new RepositoryBuilder().readEnvironment().findGitDir(rootProject.projectDir).build()
+    def originUrl = gitRepository.config.getString('remote', 'origin', 'url')
+    def originMatch = originUrl ? (originUrl =~ /github\.com[:\/]([^\/]+)\/(.+?)(\.git)?$/) : null
+    if (originMatch?.find()) {
+        ghOwner = originMatch.group(1)
+        ghRepo = originMatch.group(2)
+    }
+    if (gitRepository.branch) {
+        ghBranch = gitRepository.branch
+    }
+    gitRepository.close()
+} catch (Exception ignored) {
+    // Not a git checkout (or no 'origin' remote) - keep the fallback values above
+}
+
+// SCM-derived version: a Java/Groovy port of the semantic-release commit-analyzer concept - the
+// last final release tag reachable from HEAD, bumped by the conventional commits since it
+// (feat -> minor, fix/perf -> patch, '!'/BREAKING CHANGE -> major, highest wins), decorated with
+// -SNAPSHOT unless HEAD sits exactly on a real tag. See VersionResolver for details.
+//
+// release.forceVersion is the ultimate backstop: if set, none of the above runs at all - axion's
+// own native handling is used untouched. "Don't do anything clever, just release whatever I say
+// the number is." See https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/
+def forceVersion = project.findProperty('release.forceVersion')
+// The module's path relative to the repo root (e.g. "sub/module", "" at root) - commits are only
+// counted towards this project's version if they touched files under this path, so unrelated
+// modules in the same monorepo don't bump each other's version.
+def modulePath = rootProject.projectDir.toPath().relativize(project.projectDir.toPath()).toString()
+version = forceVersion ? scmVersion.version : resolveScmDerivedVersion(customPrefix, ghBranch, modulePath)
+
+def resolveScmDerivedVersion(String tagPrefix, String branchName, String modulePath) {
+    try {
+        // Falls back to the plain 'v' root prefix if this module has no tag of its own yet,
+        // mirroring scmVersion.tag.fallbackPrefixes above.
+        return VersionResolver.resolveBuildVersion(project.projectDir, tagPrefix, branchName, modulePath, ['v'])
+    } catch (Exception ignored) {
+        // No real git checkout to read (e.g. an in-memory ProjectBuilder test project) - fall
+        // back to axion's own resolution, same as the ghOwner/ghBranch detection above.
+        return scmVersion.version
+    }
+}
 
 group = 'io.github.duckasteroid'
 
@@ -68,35 +123,13 @@ artifacts {
     archives javadocJar, sourcesJar
 }
 
-
-
-// Derive the GitHub owner/repo/branch for the POM's project and SCM URLs from the
-// consuming project's actual 'origin' remote, rather than assuming repo name ==
-// rootProject.name and branch == master. Falls back to those old assumptions if
-// this isn't a real git checkout (e.g. an in-memory ProjectBuilder test project).
-def ghOwner = 'duckAsteroid'
-def ghRepo = rootProject.name
-def ghBranch = 'main'
-try {
-    def gitRepository = new RepositoryBuilder().readEnvironment().findGitDir(rootProject.projectDir).build()
-    def originUrl = gitRepository.config.getString('remote', 'origin', 'url')
-    def originMatch = originUrl ? (originUrl =~ /github\.com[:\/]([^\/]+)\/(.+?)(\.git)?$/) : null
-    if (originMatch?.find()) {
-        ghOwner = originMatch.group(1)
-        ghRepo = originMatch.group(2)
-    }
-    if (gitRepository.branch) {
-        ghBranch = gitRepository.branch
-    }
-    gitRepository.close()
-} catch (Exception ignored) {
-    // Not a git checkout (or no 'origin' remote) - keep the fallback values above
-}
-
-// Exposed for other duckasteroid-* convention plugins (e.g. duckasteroid-github-packages-self)
-// that want to target this project's own GitHub repo instead of a hardcoded one.
+// Exposed for other duckasteroid-* convention plugins (e.g. duckasteroid-github-packages-publish,
+// duckasteroid-release-flow) that want to target this project's own GitHub repo / tag scheme
+// instead of recomputing it.
 project.ext.ghOwner = ghOwner
 project.ext.ghRepo = ghRepo
+project.ext.tagPrefix = customPrefix
+project.ext.modulePath = modulePath
 
 // Configure the publication so that all appropriate meta data ends up in the POM
 publishing {
