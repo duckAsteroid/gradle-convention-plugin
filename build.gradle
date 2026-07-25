@@ -3,12 +3,15 @@ plugins {
     id 'com.gradle.plugin-publish' version '2.1.1'
     id 'com.github.ben-manes.versions' version '0.54.0'
     id 'pl.allegro.tech.build.axion-release' version '1.21.2'
-}
-
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
-    }
+    // Dogfooding our own conventions: java toolchain (pinned back to 21 for this project via
+    // gradle.properties' duckasteroid.java.version, since this repo targets a different Java
+    // version than the default it hands out to consumers) and SCM-derived versioning/release-flow
+    // tasks (tagReleaseCandidate, promoteReleaseCandidate, changelogFor*). Resolved from GitHub
+    // Packages via the io.github.duckasteroid.github-packages-settings bootstrap in settings.gradle
+    // - the same mechanism every other consumer of this plugin uses (see
+    // adopt-duckasteroid-gradle-conventions skill / this repo's own README).
+    id 'duckasteroid-java' version '1.0.0-RC4'
+    id 'duckasteroid-release-flow' version '1.0.0-RC4'
 }
 
 group = 'io.github.duckasteroid.conventions'
@@ -16,6 +19,21 @@ version = scmVersion.version
 
 gradlePlugin {
     vcsUrl = 'https://github.com/duckAsteroid/gradle-convention-plugin'
+}
+
+// This project IS a Gradle plugin, published via com.gradle.plugin-publish's own auto-generated
+// 'pluginMaven' publication - not a plain Java library. duckasteroid-java's 'mavenJava' publication
+// (from components.java) resolves to the exact same Maven coordinates (group:rootProject.name:version)
+// and would silently overwrite 'pluginMaven' in the same repository if both were published (confirmed
+// via `./gradlew publishToMavenLocal`, which prints exactly this warning). Since 'pluginMaven' is the
+// correct/authoritative one here, drop 'mavenJava' rather than let them race.
+// duckasteroid-java's 'mavenJava' publication isn't actually created until maven-publish's own
+// component-realization phase, which runs its own afterEvaluate-style hook AFTER this script's
+// (and even a plain project.afterEvaluate's) own callbacks - confirmed by instrumenting each phase.
+// gradle.projectsEvaluated runs after all of that has settled, so this is the first point where the
+// removal reliably takes effect.
+gradle.projectsEvaluated {
+    publishing.publications.removeIf { it.name == 'mavenJava' }
 }
 
 repositories {
