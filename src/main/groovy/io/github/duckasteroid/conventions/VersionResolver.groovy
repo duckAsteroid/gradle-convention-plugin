@@ -387,9 +387,11 @@ class VersionResolver {
     }
 
     /**
-     * The tag exactly at HEAD matching this prefix, whether a final release or an "-RCn" tag - both
-     * count as "HEAD is already a real, released version, nothing to compute" for
-     * {@link #resolveBuildVersion}. Returns null if HEAD isn't tagged at all under this prefix.
+     * The version (tagPrefix stripped) exactly at HEAD matching this prefix, whether a final
+     * release or an "-RCn" tag - both count as "HEAD is already a real, released version, nothing
+     * to compute" for {@link #resolveBuildVersion}. Returns null if HEAD isn't tagged at all under
+     * this prefix. Prefix is stripped here so the return value matches every other version string
+     * this class produces (resolveCandidateVersionIn/bumpVersion never include tagPrefix either).
      */
     private static String exactTagAt(Repository repo, String tagPrefix) {
         ObjectId headId = repo.resolve('HEAD')
@@ -399,7 +401,7 @@ class VersionResolver {
         for (Ref tagRef : allTagRefs(repo)) {
             String name = shortName(tagRef)
             if (name.startsWith(tagPrefix) && peeledCommitId(repo, tagRef) == headId) {
-                return name
+                return name.substring(tagPrefix.length())
             }
         }
         return null

@@ -79,10 +79,10 @@ public class VersionResolverTest {
   }
 
   @Test
-  void buildVersionReturnsExactTagVerbatimWhenHeadIsOnOne() throws Exception {
+  void buildVersionReturnsExactTagStrippedOfPrefixWhenHeadIsOnOne() throws Exception {
     commit("chore: init");
     tag("v1.0.0");
-    assertEquals("v1.0.0", VersionResolver.resolveBuildVersion(repo, PREFIX, "main"));
+    assertEquals("1.0.0", VersionResolver.resolveBuildVersion(repo, PREFIX, "main"));
   }
 
   @Test
