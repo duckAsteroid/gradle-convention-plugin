@@ -1,0 +1,70 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+# Promotes an accepted release candidate to a final release on every push to `main`:
+# promoteReleaseCandidate strips the -RCn suffix off the nearest reachable RC tag (or picks up
+# release.forceVersion if set), mints the final tag, and this job then cuts the GitHub Release and
+# publishes it - all in the same job, for the same reason release-candidate.yml is self-contained
+# (a tag pushed with the default GITHUB_TOKEN doesn't trigger other workflow runs).
+#
+# This repo dogfoods its own duckasteroid-java/duckasteroid-release-flow conventions (see
+# build.gradle/settings.gradle) by depending on them as a *published* GitHub Packages artifact,
+# same as any other consumer. This workflow is the live counterpart of
+# examples/workflows/promote-release.yml, which remains as a generic reference for other consumer
+# projects wiring up the same flow.
+name: Promote release candidate to final release
+on:
+  push:
+    branches:
+      - main
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed to create the tag/GitHub Release
+      packages: write # needed to publish to GitHub Packages (and read duckasteroid-* plugins)
+    env:
+      # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
+      # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full tag + commit history needed to find the RC tag to promote
+
+      - uses: actions/setup-java@v4
+        with:
+          # 21: this project's own toolchain, set via gradle.properties' duckasteroid.java.version.
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Validate Gradle wrapper
+        uses: gradle/wrapper-validation-action@v1
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # Must run BEFORE promoting: it looks for the last reachable *final* release tag, which the
+      # about-to-be-created final tag would otherwise shadow (HEAD would already be sitting on it).
+      - name: Generate release notes
+        run: ./gradlew changelogForRelease
+
+      - name: Promote release candidate to final
+        run: ./gradlew promoteReleaseCandidate
+
+      - name: Determine tag
+        id: tag
+        run: echo "name=$(git describe --tags --exact-match HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ steps.tag.outputs.name }}" --notes-file build/changelog.md
+
+      - name: Publish package
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: publish

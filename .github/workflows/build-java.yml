@@ -17,13 +17,19 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read # needed to resolve duckasteroid-java/-release-flow from GitHub Packages (dogfooding)
 
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
-          java-version: "20"
+          # 21, not 20: this project now applies duckasteroid-java to itself (dogfooding), which
+          # sets a Java 21 toolchain via gradle.properties' duckasteroid.java.version. There's no
+          # auto-download resolver configured, so Gradle needs a JDK it can already see on PATH.
+          java-version: "21"
           distribution: "temurin"
 
       - name: Setup Gradle
@@ -34,3 +40,9 @@ jobs:
 
       - name: Execute Gradle build
         run: ./gradlew build
+        env:
+          # Resolving duckasteroid-java/-release-flow/github-packages-settings from GitHub Packages
+          # at plugin-resolution time needs read credentials - tier 2 of the credential fallback
+          # (GITHUB_ACTOR is already in the default Actions env; GITHUB_TOKEN has to be exported
+          # explicitly).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

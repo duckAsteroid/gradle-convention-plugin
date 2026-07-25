@@ -1,0 +1,73 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+# Auto-bumps the release-candidate number on every push to `release`: tagReleaseCandidate derives
+# the candidate version from conventional commits since the last final release (or picks up
+# release.forceVersion if set), mints the next -RCn tag, and this job then cuts a GitHub
+# pre-release and publishes it - all in the same job.
+#
+# This repo dogfoods its own duckasteroid-java/duckasteroid-release-flow conventions (see
+# build.gradle/settings.gradle) by depending on them as a *published* GitHub Packages artifact,
+# same as any other consumer - not by applying the in-source precompiled script plugin to itself
+# (which really is circular/impossible; see CLAUDE.md). This workflow is the live counterpart of
+# examples/workflows/release-candidate.yml, which remains as a generic reference for other
+# consumer projects wiring up the same flow.
+#
+# Deliberately self-contained rather than relying on the tag push to trigger a separate publish
+# workflow: a tag pushed with the default GITHUB_TOKEN does not trigger other workflow runs.
+name: Tag and publish a release candidate
+on:
+  push:
+    branches:
+      - release
+jobs:
+  release-candidate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed to create the tag/GitHub Release
+      packages: write # needed to publish to GitHub Packages (and read duckasteroid-* plugins)
+    env:
+      # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
+      # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full tag + commit history needed to derive the version
+
+      - uses: actions/setup-java@v4
+        with:
+          # 21: this project's own toolchain, set via gradle.properties' duckasteroid.java.version.
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Validate Gradle wrapper
+        uses: gradle/wrapper-validation-action@v1
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # Must run BEFORE tagging: it looks for the *previous* RC tag reachable from HEAD, which the
+      # about-to-be-created tag would otherwise shadow.
+      - name: Generate release-candidate notes
+        run: ./gradlew changelogForReleaseCandidate
+
+      - name: Tag next release candidate
+        run: ./gradlew tagReleaseCandidate
+
+      - name: Determine tag
+        id: tag
+        run: echo "name=$(git describe --tags --exact-match HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ steps.tag.outputs.name }}" --notes-file build/changelog.md --prerelease
+
+      - name: Publish package
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: publish
