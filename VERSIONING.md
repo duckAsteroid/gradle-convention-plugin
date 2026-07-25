@@ -19,7 +19,8 @@ That computation is a small Groovy port of the semantic-release
 (the commit-message classification) and
 [`VersionResolver.groovy`](src/main/groovy/io/github/duckasteroid/conventions/VersionResolver.groovy)
 (everything else - finding the right tag, walking commits, applying the bump, minting release tags).
-Both are plain classes with no Gradle dependency, unit-tested directly.
+Both are plain classes with no Gradle dependency, unit-tested directly. The same commit history and
+classification also drives auto-generated release notes - see "Generating release notes" below.
 
 ## Why not just use axion-release's own version computation?
 
@@ -143,41 +144,108 @@ with the repo checked out, `./gradlew build` computes the same version it would 
 
 ## The `develop` → `release` → `main` flow
 
-`duckasteroid-release-flow` (opt-in - apply it alongside `duckasteroid-java`) adds two tasks that
-turn a computed candidate version into an actual, pushed git tag:
+`duckasteroid-release-flow` (opt-in - apply it alongside `duckasteroid-java`) adds tasks that turn a
+computed candidate version into an actual, pushed git tag, plus matching release notes:
 
 ```
  develop/feature branches          release                          main
 ──────────────────────────► merge ──────────────────► merge ──────────────────►
   every build:                each push:                each push:
-  X.Y.Z-SNAPSHOT               tagReleaseCandidate        promoteReleaseCandidate
-  (feature branches:            → X.Y.Z-RC1, RC2, ...      → strips "-RCn"
-   X.Y.Z-branch-SNAPSHOT)                                  → X.Y.Z (final)
+  X.Y.Z-SNAPSHOT               changelogForReleaseCandidate  changelogForRelease
+  (feature branches:            tagReleaseCandidate           promoteReleaseCandidate
+   X.Y.Z-branch-SNAPSHOT)       → X.Y.Z-RC1, RC2, ...          → strips "-RCn"
+                                                                → X.Y.Z (final)
 ```
 
 - **`tagReleaseCandidate`** computes the candidate version (same computation as an ordinary build,
   minus the `-SNAPSHOT` decoration) and mints the next `X.Y.Z-RCn` tag for it - `RC1` the first time
   a given candidate version is tagged, `RC2`/`RC3`/... on each subsequent invocation for the *same*
-  candidate. Intended to run on every push to `release` (see
-  [`release-candidate.yml`](.github/workflows/release-candidate.yml)), so merging accepted work from
-  `develop` into `release` automatically starts the RC cycle - and further commits on `release` (a
-  fix spotted during RC testing, say) automatically advance it - with no manual version bookkeeping
-  anywhere.
+  candidate. Intended to run on every push to `release`, so merging accepted work from `develop` into
+  `release` automatically starts the RC cycle - and further commits on `release` (a fix spotted
+  during RC testing, say) automatically advance it - with no manual version bookkeeping anywhere.
 - **`promoteReleaseCandidate`** finds the nearest release-candidate tag reachable from the current
   commit and strips its `-RCn` suffix to produce the final release tag. Intended to run on every push
-  to `main` (see [`promote-release.yml`](.github/workflows/promote-release.yml)) - i.e. once an
-  accepted RC has been merged from `release`.
+  to `main` - i.e. once an accepted RC has been merged from `release`.
+- **`changelogForReleaseCandidate`** / **`changelogForRelease`** generate the matching Markdown
+  release notes (see "Generating release notes" below) - each **must run before** its
+  tagging/promoting counterpart in the same job, since they look for the *previous* RC tag / the
+  last *final* tag reachable from HEAD, which the about-to-be-created new tag would otherwise shadow.
 
-Both tasks are plain Gradle tasks (`./gradlew tagReleaseCandidate`, `./gradlew
-promoteReleaseCandidate`), runnable locally as well as from CI - release engineering doesn't
-hard-depend on GitHub Actions being available. Both workflows are each a single, self-contained job
-(tag, cut the GitHub Release, `gradlew publish`) rather than relying on the pushed tag to trigger a
-separate workflow, because a tag pushed with the default `GITHUB_TOKEN` doesn't trigger other
-workflow runs - the same reason [`publish.yml`](.github/workflows/publish.yml) combines
-release-creation and publishing into one job.
+All four are plain Gradle tasks (`./gradlew tagReleaseCandidate`, etc.), runnable locally as well as
+from CI - release engineering doesn't hard-depend on GitHub Actions being available.
+[`examples/workflows/release-candidate.yml`](examples/workflows/release-candidate.yml) and
+[`promote-release.yml`](examples/workflows/promote-release.yml) show the full CI wiring - **templates
+for a consumer project's own `.github/workflows/`**, not live workflows in this repo (see the "Why
+this repo doesn't dogfood its own plugin" section below for why). Each is a single, self-contained
+job (changelog, tag, cut the GitHub Release with `--notes-file`, `gradlew publish`) rather than
+relying on the pushed tag to trigger a separate workflow, because a tag pushed with the default
+`GITHUB_TOKEN` doesn't trigger other workflow runs - the same reason [`publish.yml`](.github/workflows/publish.yml)
+combines release-creation and publishing into one job.
 
 `publish.yml` itself is untouched by any of this - it still triggers on any `v*` tag pushed directly
 (by hand, or by anything else), and remains the fallback entry point for a manually-pushed tag.
+
+## Why this repo doesn't dogfood its own plugin
+
+`duckasteroid-java`/`duckasteroid-release-flow` are defined *in this repo* (`src/main/groovy/*.gradle`)
+but this repo's own `build.gradle` never applies them to itself - it uses plain `axion-release`
+directly, and its own release process is still just "push a `v*` tag, `publish.yml` handles the
+rest." This is a hard constraint, not a stylistic choice: a Gradle project **cannot** apply a
+precompiled script plugin to the same project that builds it, because the plugin has to be compiled
+before it can be applied, but compiling it depends on the very build script that would be applying
+it. Confirmed empirically - adding `id 'duckasteroid-java'` to this repo's own `plugins { }` block
+fails with `Plugin [id: 'duckasteroid-java'] was not found... Included Builds (No included builds
+contain this plugin)`. Making this work for real would mean restructuring this single-project repo
+into a multi-project/composite-build layout, which wasn't judged worth the complexity.
+
+Practical upshot: [`examples/workflows/release-candidate.yml`](examples/workflows/release-candidate.yml)
+and [`promote-release.yml`](examples/workflows/promote-release.yml) are **templates** showing what a
+*consumer* project applying `duckasteroid-release-flow` should put in its own `.github/workflows/` -
+they live under `examples/`, not `.github/workflows/`, specifically so they can never be triggered
+(and fail) in this repo.
+
+## Generating release notes
+
+`ChangelogGenerator` turns a list of commit messages into grouped Markdown release notes - the same
+idea implemented by [conventional-changelog](https://github.com/conventional-changelog/conventional-changelog),
+[git-cliff](https://git-cliff.org/), and semantic-release's `release-notes-generator` plugin: group by
+the *same* `typeRules` classification the version bump itself uses (so a custom `majorTypes` entry
+ends up under Breaking Changes exactly like a `!`-marked commit would, and a `noBumpTypes` entry is
+omitted exactly like it doesn't affect the version), rather than introducing a second, separate
+type-to-section mapping to configure:
+
+```markdown
+## Breaking Changes
+- drop support for old config format
+
+## Features
+- add support for widgets
+
+## Bug Fixes
+- correct off-by-one error
+```
+
+A non-conforming commit still gets classified PATCH (and still prints its stderr warning - see
+above) and appears under Bug Fixes using its raw first line as the description, consistent with it
+having actually bumped the version. An entirely no-bump batch (or a first release with truly no
+qualifying commits) produces `No user-facing changes.` rather than an empty file.
+
+`VersionResolver.commitMessagesForChangelog` supplies the commit list, choosing the "since" boundary
+per `ChangelogScope`:
+
+- **`SINCE_LAST_RELEASE`** (default) - everything since the last *final* release tag, i.e. the
+  complete picture across every RC in this cycle so far. Always used for `changelogForRelease`
+  (the final release's notes should be the complete picture, regardless of `rcScope`).
+- **`SINCE_PREVIOUS_RC`** - only commits since the *previous* release-candidate tag - a delta, useful
+  for reviewers re-checking what changed in a bumped RC rather than re-reading the whole cycle again.
+  Falls back to `SINCE_LAST_RELEASE` automatically when there's no previous RC yet. Only meaningful
+  for `changelogForReleaseCandidate`, controlled via:
+
+```groovy
+changelog {
+    rcScope = ChangelogScope.SINCE_PREVIOUS_RC   // default: SINCE_LAST_RELEASE
+}
+```
 
 ## The `release.forceVersion` backstop
 
@@ -250,10 +318,15 @@ extra wiring.
 - [`VersionResolverTest`](src/test/java/VersionResolverTest.java) - builds a real throwaway git repo
   per test (via plain `git` CLI calls, since this is test *setup*, not the code under test) rather
   than mocking git, including fixtures with real file changes under different subdirectories to
-  exercise the path-scoping behavior, and custom `typeRules` maps threaded all the way through to the
-  computed version.
+  exercise the path-scoping behavior, custom `typeRules` maps threaded all the way through to the
+  computed version, and `commitMessagesForChangelog` for both `ChangelogScope`s (including the
+  previous-RC-tag fallback when no previous RC exists yet).
 - [`CommitAnalyzerExtensionTest`](src/test/java/CommitAnalyzerExtensionTest.java) - applies
   `duckasteroid-java` via `ProjectBuilder` and exercises the `commitAnalyzer { }` extension itself:
   its defaults mirror `CommitAnalyzer.DEFAULT_TYPE_RULES` exactly, `.add(...)` appends onto the
   default rather than replacing it, `.set(...)` replaces it, and each of the four properties can be
   configured independently of the others.
+- [`ChangelogGeneratorTest`](src/test/java/ChangelogGeneratorTest.java) - plain JUnit, no git
+  involved: section grouping/ordering, scope formatting, no-bump commits omitted, non-conforming
+  commits still listed under Bug Fixes, custom `typeRules` (including a custom `majorTypes` entry
+  grouping under Breaking Changes without a `!` marker) threaded through correctly.

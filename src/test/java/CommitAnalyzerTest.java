@@ -1,8 +1,11 @@
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.duckasteroid.conventions.CommitAnalyzer;
 import io.github.duckasteroid.conventions.CommitAnalyzer.Bump;
+import io.github.duckasteroid.conventions.CommitAnalyzer.ParsedCommit;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.util.Arrays;
@@ -217,5 +220,76 @@ public class CommitAnalyzerTest {
         "feat: add a thing"
     );
     assertEquals(Bump.MAJOR, CommitAnalyzer.analyze(messages, rules));
+  }
+
+  // ---- parse() - the syntactic parse used by ChangelogGenerator ----
+
+  @Test
+  void parseExtractsTypeScopeAndDescription() {
+    ParsedCommit parsed = CommitAnalyzer.parse("feat(api): add support for widgets");
+    assertTrue(parsed.isConforms());
+    assertFalse(parsed.isEmpty());
+    assertEquals("feat", parsed.getType());
+    assertEquals("api", parsed.getScope());
+    assertEquals("add support for widgets", parsed.getDescription());
+    assertFalse(parsed.isBreaking());
+  }
+
+  @Test
+  void parseHasNullScopeWhenAbsent() {
+    ParsedCommit parsed = CommitAnalyzer.parse("fix: correct off-by-one error");
+    assertEquals("fix", parsed.getType());
+    assertNull(parsed.getScope());
+    assertEquals("correct off-by-one error", parsed.getDescription());
+  }
+
+  @Test
+  void parseDetectsBreakingMarker() {
+    ParsedCommit parsed = CommitAnalyzer.parse("feat(api)!: drop support for old format");
+    assertTrue(parsed.isBreaking());
+    assertEquals("feat", parsed.getType());
+    assertEquals("api", parsed.getScope());
+  }
+
+  @Test
+  void parseDetectsBreakingFooterEvenWithoutMarker() {
+    ParsedCommit parsed = CommitAnalyzer.parse("fix: patch a bug\n\nBREAKING CHANGE: removes the old API");
+    assertTrue(parsed.isBreaking());
+    assertEquals("fix", parsed.getType());
+    assertEquals("patch a bug", parsed.getDescription());
+  }
+
+  @Test
+  void parseOnlyCapturesTheSubjectLineNotTheBody() {
+    ParsedCommit parsed = CommitAnalyzer.parse("feat: add a thing\n\nSome body text describing the change in detail.");
+    assertEquals("add a thing", parsed.getDescription());
+  }
+
+  @Test
+  void parseNonConformingMessageIsNotConformingButHasTheFirstLineAsDescription() {
+    ParsedCommit parsed = CommitAnalyzer.parse("Merge pull request #1 from foo/bar");
+    assertFalse(parsed.isConforms());
+    assertFalse(parsed.isEmpty());
+    assertNull(parsed.getType());
+    assertEquals("Merge pull request #1 from foo/bar", parsed.getDescription());
+  }
+
+  @Test
+  void parseEmptyMessageIsMarkedEmptyNotNonConforming() {
+    ParsedCommit parsed = CommitAnalyzer.parse("");
+    assertTrue(parsed.isEmpty());
+    assertFalse(parsed.isConforms());
+
+    ParsedCommit parsedNull = CommitAnalyzer.parse(null);
+    assertTrue(parsedNull.isEmpty());
+  }
+
+  @Test
+  void parseIsIndependentOfTypeRulesUnlikeAnalyzeOne() {
+    // 'chore' isn't in minorTypes/patchTypes/majorTypes, but parse() doesn't care - it's purely
+    // syntactic, unaffected by any typeRules configuration.
+    ParsedCommit parsed = CommitAnalyzer.parse("chore: bump a dependency");
+    assertTrue(parsed.isConforms());
+    assertEquals("chore", parsed.getType());
   }
 }

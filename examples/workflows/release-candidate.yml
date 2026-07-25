@@ -1,3 +1,10 @@
+# TEMPLATE - not a live workflow for this repo. This repo's own build.gradle applies plain
+# axion-release directly, not duckasteroid-java/duckasteroid-release-flow (a Gradle project can't
+# apply a precompiled script plugin to the same project that builds it - it's circular), so this
+# repo's own release process stays on publish.yml, triggered by a manually-pushed tag. This file
+# shows what a *consumer* project applying duckasteroid-release-flow should put in its own
+# .github/workflows/ to get the develop -> release -> main flow described in VERSIONING.md.
+#
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
@@ -36,6 +43,11 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      # Must run BEFORE tagging: it looks for the *previous* RC tag reachable from HEAD, which the
+      # about-to-be-created tag would otherwise shadow.
+      - name: Generate release-candidate notes
+        run: ./gradlew changelogForReleaseCandidate
+
       - name: Tag next release candidate
         run: ./gradlew tagReleaseCandidate
 
@@ -46,7 +58,7 @@ jobs:
       - name: Create GitHub pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ steps.tag.outputs.name }}" --generate-notes --prerelease
+        run: gh release create "${{ steps.tag.outputs.name }}" --notes-file build/changelog.md --prerelease
 
       - name: Publish package
         uses: gradle/gradle-build-action@v2

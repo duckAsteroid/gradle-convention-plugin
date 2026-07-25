@@ -128,27 +128,35 @@ The convention plugins are split so consumers can opt into only what they want, 
   `-publish` to describe what it does, since the hardcoded variant wasn't needed.)
 - `duckasteroid-release-flow.gradle` — opt-in release-engineering plugin for a
   `develop`/`release` → `main` git flow: `release` accumulates release-candidate builds before an accepted RC
-  is promoted to a final release on `main`. Two tasks, both reusing `VersionResolver` and both respecting the
-  `release.forceVersion` backstop, both plain Gradle tasks runnable locally as well as from CI:
+  is promoted to a final release on `main`. Four tasks, all reusing `VersionResolver`, the tagging two also
+  respecting the `release.forceVersion` backstop, all plain Gradle tasks runnable locally as well as from CI:
   - `tagReleaseCandidate` — tags/pushes the next `X.Y.Z-RCn` (auto-incrementing `n`); intended to run on every
     push to `release`.
   - `promoteReleaseCandidate` — strips the `-RCn` suffix off the nearest reachable RC tag and tags/pushes the
     final `X.Y.Z`; intended to run on every push to `main`.
-  - `.github/workflows/release-candidate.yml` and `.github/workflows/promote-release.yml` wire these up,
-    triggered on push to `release`/`main` respectively. Each is a **single self-contained job** (tag, create
-    the GitHub Release, `gradlew publish`) rather than relying on the tag push to trigger `publish.yml` — a tag
-    pushed with the default `GITHUB_TOKEN` doesn't trigger other workflow runs, the same reason `publish.yml`
-    combines release-creation and publishing into one job (see below). `publish.yml` (triggered directly by
-    any pushed `v*` tag) is left untouched as a fallback for manually-pushed tags.
-  - The `develop` branch has **not** been renamed to `release` yet (deferred by the author) —
-    `build-java.yml` still lists both branch names, and `release-candidate.yml` simply won't fire until/unless
-    that rename happens.
+  - `changelogForReleaseCandidate` / `changelogForRelease` — generate Markdown release notes (via
+    `ChangelogGenerator`, from commit messages via `VersionResolver.commitMessagesForChangelog`) to
+    `build/changelog.md`, for a CI step to feed into `gh release create --notes-file`. Deliberately separate
+    tasks from the tag/promote ones (so notes can be previewed locally before actually cutting a release) but
+    **must run before** their tagging counterpart in the same job — they look for the *previous* RC tag / the
+    last *final* tag reachable from HEAD, which the about-to-be-created new tag would otherwise shadow.
+  - `changelogForReleaseCandidate`'s "since" boundary is controlled by the `changelog { rcScope = ... }`
+    extension (`ChangelogExtension.groovy`, `ChangelogScope` enum: `SINCE_LAST_RELEASE` (default, the whole
+    cycle so far) or `SINCE_PREVIOUS_RC` (just the delta, falling back to `SINCE_LAST_RELEASE` automatically
+    when there's no previous RC yet)). `changelogForRelease` always uses `SINCE_LAST_RELEASE` — the final
+    release's notes should be the complete picture regardless of that setting.
+  - `examples/workflows/release-candidate.yml` and `promote-release.yml` are **templates**, not live workflows
+    in this repo's own `.github/workflows/` — see the important note below about why.
 - `src/test/java/JavaConventionsPluginTest.java` — uses `ProjectBuilder` + Gradle TestKit to apply the plugin to
   an in-memory project and assert specific plugins/config landed, rather than a full end-to-end build.
 - `src/test/java/CommitAnalyzerExtensionTest.java` — same `ProjectBuilder` approach, specifically for the
   `commitAnalyzer { }` extension: asserts its defaults mirror `CommitAnalyzer.DEFAULT_TYPE_RULES`, that
   `.add(...)` appends onto the default rather than replacing it (the `addAll`-not-`convention` behavior above),
   that `.set(...)` replaces it, and that the four properties can be configured independently.
+- `src/test/java/ChangelogGeneratorTest.java` — plain JUnit, no git involved: section grouping/ordering,
+  scope (`**scope:**`) formatting, no-bump commits omitted, non-conforming commits still listed under Bug
+  Fixes with their raw first line, and custom `typeRules` (including a custom `majorTypes` entry grouping
+  under Breaking Changes without a `!` marker) threaded through correctly.
 - `build.gradle` (root) — builds the plugin JAR itself: applies `groovy-gradle-plugin`, `com.gradle.plugin-publish`,
   `com.github.ben-manes.versions`, and `axion-release` for its own versioning. Targets Java 21 for the plugin
   project itself — separate from the toolchain version `duckasteroid-java.gradle` configures for consumers.
@@ -210,6 +218,16 @@ CI (`.github/workflows/build-java.yml`) runs `./gradlew build` on pushes to `fea
 chained via the `release: created` event — a workflow run triggered by the default `GITHUB_TOKEN` does not trigger
 other workflows, so a separate release-creation workflow would silently fail to kick off the publish step. Don't
 split this back into two workflows without switching the release-creation step to a PAT. The same constraint is
-why `.github/workflows/release-candidate.yml` and `promote-release.yml` (triggered on push to `release`/`main`)
-are each a single self-contained job rather than relying on the tag they push to trigger `publish.yml` — see the
-`duckasteroid-release-flow.gradle` bullet above.
+why the `examples/workflows/release-candidate.yml` / `promote-release.yml` **templates** (triggered on push to
+`release`/`main`, for consumer projects — see below) are each a single self-contained job rather than relying on
+the tag they push to trigger `publish.yml` — see the `duckasteroid-release-flow.gradle` bullet above.
+
+**Important: this repo does not, and cannot, apply `duckasteroid-java`/`duckasteroid-release-flow` to its own
+build.** A Gradle project can't apply a precompiled script plugin to the same project that builds it — the
+plugin has to be compiled before it can be applied, but compiling it depends on the very build script that
+would be applying it (confirmed empirically: Gradle fails with `Plugin [id: 'duckasteroid-java'] was not
+found... Included Builds (No included builds contain this plugin)`). So this repo's own release process stays
+on plain `axion-release` + `publish.yml` (manually-pushed tag triggers it), unrelated to everything in the
+`duckasteroid-release-flow.gradle` bullet above. The `examples/workflows/*.yml` files show what a *consumer*
+project applying these plugins should put in its own `.github/workflows/` — don't move them back into this
+repo's own `.github/workflows/` expecting them to work here.

@@ -76,5 +76,12 @@ These are not applied by `duckasteroid-java` — apply them alongside it if you 
     on every push to `release`.
   * `promoteReleaseCandidate` — strips the `-RCn` suffix off the nearest reachable RC tag and tags/pushes the final
     `X.Y.Z` (or `release.forceVersion` if set). Intended to run on every push to `main`.
-  * Both are plain Gradle tasks, runnable locally as well as from CI — release engineering doesn't hard-depend on
-    GitHub Actions being available.
+  * `changelogForReleaseCandidate` / `changelogForRelease` — generate grouped Markdown release notes (Breaking
+    Changes/Features/Bug Fixes, from the same commits and `typeRules` as the version bump) to `build/changelog.md`,
+    for feeding into `gh release create --notes-file`. Each must run *before* its tagging/promoting counterpart in
+    the same job. `changelogForReleaseCandidate`'s scope (whole cycle so far, or just the delta since the previous
+    RC) is configurable via `changelog { rcScope = ... }` — see [VERSIONING.md](VERSIONING.md) for details.
+  * All four are plain Gradle tasks, runnable locally as well as from CI — release engineering doesn't hard-depend
+    on GitHub Actions being available. See `examples/workflows/` for the full CI wiring — these are templates for
+    a *consumer* project's own workflows, since this repo can't apply its own plugins to itself (see
+    [VERSIONING.md](VERSIONING.md)).

@@ -37,6 +37,11 @@ import java.util.regex.Pattern
  * by ordinary builds: the former mints the next "-RCn" tag for the computed candidate version, the
  * latter strips the "-RCn" suffix off the nearest reachable RC tag to produce the final release tag.
  *
+ * {@link #commitMessagesForChangelog} is the equivalent supporting operation for release notes (see
+ * {@link ChangelogGenerator}): it reuses the same tag-lookup machinery to decide which commits are
+ * "new" for a changelog, just with its own scope rules (see {@link ChangelogScope}) rather than the
+ * version-bump rules above.
+ *
  * Deliberately uses JGit rather than shelling out to the `git` CLI: `resolveBuildVersion` is called
  * from `version = ...` in duckasteroid-java.gradle at Gradle *configuration* time, and starting an
  * external process during configuration is incompatible with the Gradle configuration cache (JGit is
@@ -156,6 +161,55 @@ class VersionResolver {
                 throw new IllegalStateException("Tag '${rcTag}' does not look like a release candidate")
             }
             return "${tagPrefix}${m.group(1)}.${m.group(2)}.${m.group(3)}"
+        }
+    }
+
+    /**
+     * Full commit messages to build a changelog from, for {@link ChangelogGenerator}. The "since"
+     * boundary depends on scope:
+     *
+     *   - {@link ChangelogScope#SINCE_LAST_RELEASE}: the last final release tag (falling back
+     *     through fallbackPrefixes exactly like {@link #resolveCandidateVersion}) - the complete
+     *     picture for this release cycle so far.
+     *   - {@link ChangelogScope#SINCE_PREVIOUS_RC}: the nearest reachable release-candidate tag - a
+     *     delta since the last RC - falling back to the last final release tag if there is no
+     *     previous RC yet (the first RC in a cycle has nothing to diff against).
+     *
+     * Same modulePath restriction as version resolution: only commits that touched this module's own
+     * directory are included, so a changelog generated for one subproject in a monorepo doesn't list
+     * changes from an unrelated sibling.
+     *
+     * <b>Caller must run this BEFORE minting any new tag for the current HEAD</b> (see
+     * duckasteroid-release-flow.gradle's changelogForReleaseCandidate/changelogForRelease tasks,
+     * which always run before tagReleaseCandidate/promoteReleaseCandidate in the same job). Both
+     * scopes locate their "since" boundary by looking for a tag reachable from HEAD - if HEAD were
+     * already tagged with the release currently being prepared, that brand-new tag would itself be
+     * "the nearest reachable RC tag" or "the last final release tag", making the commit range (and
+     * therefore the generated changelog) come back empty.
+     *
+     * @param repoDir any directory inside the git repo (JGit walks upward to find the .git dir)
+     * @param tagPrefix this module's own tag prefix, e.g. "v" at the root or "sub/module/v"
+     * @param modulePath this module's directory relative to the repo root ("" at the root)
+     * @param fallbackPrefixes tried in order if tagPrefix has no final tag reachable from HEAD yet
+     *        (only relevant for the SINCE_LAST_RELEASE fallback path, same as resolveCandidateVersion)
+     * @param scope see {@link ChangelogScope}
+     */
+    static List<String> commitMessagesForChangelog(File repoDir, String tagPrefix, String modulePath,
+                                                    List<String> fallbackPrefixes, ChangelogScope scope) {
+        return withRepo(repoDir) { Repository repo ->
+            ObjectId sinceCommit = null
+            if (scope == ChangelogScope.SINCE_PREVIOUS_RC) {
+                Pattern rcSuffix = ~/-RC\d+$/
+                String rcTag = nearestReachableTag(repo, tagPrefix, rcSuffix)
+                if (rcTag != null) {
+                    sinceCommit = commitForTag(repo, rcTag)
+                }
+            }
+            if (sinceCommit == null) {
+                Tuple2<String, String> lookup = lastFinalVersionLookup(repo, tagPrefix, fallbackPrefixes)
+                sinceCommit = commitForTag(repo, "${lookup.v1}${lookup.v2}")
+            }
+            return commitMessagesSince(repo, sinceCommit, modulePath)
         }
     }
 

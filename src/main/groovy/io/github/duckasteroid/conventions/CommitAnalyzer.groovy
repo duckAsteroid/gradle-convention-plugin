@@ -53,7 +53,9 @@ import java.util.regex.Pattern
  * `patchTypes` resolves to MAJOR.
  *
  * See {@link io.github.duckasteroid.conventions.VersionResolver} for how the result of analyzing a
- * batch of commits gets turned into an actual version number.
+ * batch of commits gets turned into an actual version number, and {@link ChangelogGenerator} for how
+ * {@link #parse(String)} - the syntactic parse, independent of typeRules - gets turned into release
+ * notes.
  */
 class CommitAnalyzer {
 
@@ -65,6 +67,35 @@ class CommitAnalyzer {
      */
     static enum Bump {
         NONE, PATCH, MINOR, MAJOR
+    }
+
+    /**
+     * The syntactic parse of a commit message, independent of any type -> bump configuration - see
+     * {@link #parse(String)}. Used by {@link ChangelogGenerator} to render release notes; also used
+     * internally by {@link #analyzeOne(String, Map)}.
+     */
+    static final class ParsedCommit {
+        /** True if there was nothing to parse at all (a null/blank message, e.g. --allow-empty-message). */
+        final boolean empty
+        /** True if the message matched the "type[(scope)][!]: description" subject-line shape. */
+        final boolean conforms
+        /** Lowercase type word (e.g. "feat"), or null if !conforms or empty. */
+        final String type
+        /** Scope text without parens (e.g. "api" from "feat(api):"), or null if absent/!conforms/empty. */
+        final String scope
+        /** The subject-line description after the colon; the trimmed first line verbatim if !conforms. */
+        final String description
+        /** '!' marker on the subject line, or a BREAKING CHANGE/BREAKING-CHANGE footer anywhere in the body. */
+        final boolean breaking
+
+        ParsedCommit(boolean empty, boolean conforms, String type, String scope, String description, boolean breaking) {
+            this.empty = empty
+            this.conforms = conforms
+            this.type = type
+            this.scope = scope
+            this.description = description
+            this.breaking = breaking
+        }
     }
 
     /**
@@ -83,14 +114,12 @@ class CommitAnalyzer {
     private static final List<Bump> SEVERITY_DESCENDING =
             Collections.unmodifiableList([Bump.MAJOR, Bump.MINOR, Bump.PATCH, Bump.NONE])
 
-    // Matches "<type>[(<scope>)][!]: <description...>" against the WHOLE message (Pattern.DOTALL
-    // makes '.' also match newlines, so the trailing ".*" swallows the body/footer too - we only
-    // care about capturing group 1 (type) and group 3 (the optional '!'), the rest of the message
-    // is handled separately by BREAKING_FOOTER_PATTERN below). A message that doesn't start with
-    // this shape at all (e.g. "Merge pull request #1 ...", a merge commit's default message) fails
-    // to match entirely, which is one of the two "non-conforming" cases handled in analyzeOne.
-    private static final Pattern TYPE_PATTERN =
-            Pattern.compile(/^(\w+)(\([^)]+\))?(!)?:\s*.*/, Pattern.DOTALL)
+    // Matches "<type>[(<scope>)][!]: <description>" against just the SUBJECT LINE (the first line of
+    // the message) - group 1 = type, group 3 = scope text (without parens), group 4 = the optional
+    // '!', group 5 = the description text. Deliberately scoped to the first line only (unlike the
+    // message as a whole) so the captured description doesn't swallow the body/footer too.
+    private static final Pattern SUBJECT_PATTERN =
+            Pattern.compile(/^(\w+)(\(([^)]+)\))?(!)?:\s*(.*)$/)
 
     // The Conventional Commits spec defines a BREAKING CHANGE footer as a line starting with
     // literally "BREAKING CHANGE:" or "BREAKING-CHANGE:" (case-sensitive), which can appear
@@ -125,34 +154,53 @@ class CommitAnalyzer {
      * @param typeRules see {@link #DEFAULT_TYPE_RULES}; defaults to the built-in mapping
      */
     static Bump analyzeOne(String message, Map<Bump, Set<String>> typeRules = DEFAULT_TYPE_RULES) {
-        if (message == null || message.trim().isEmpty()) {
-            // Nothing to analyze at all (e.g. an --allow-empty-message commit) - not the same thing
-            // as a non-conforming message, so no warning and no defensive bump here.
+        ParsedCommit parsed = parse(message)
+        if (parsed.empty) {
+            // Nothing to analyze at all - not the same thing as a non-conforming message, so no
+            // warning and no defensive bump here.
             return Bump.NONE
         }
-        String trimmed = message.trim()
-        Matcher matcher = TYPE_PATTERN.matcher(trimmed)
-        if (!matcher.matches()) {
-            return warnNonConforming(trimmed)
-        }
-        String type = matcher.group(1).toLowerCase()
-        boolean breakingMarker = matcher.group(3) == '!'
-        boolean breakingFooter = BREAKING_FOOTER_PATTERN.matcher(trimmed).find()
-        // Breaking-ness always wins over the type-rule mapping below, per spec: "fix!:" or a fix
-        // with a BREAKING CHANGE footer is MAJOR, not PATCH - unconditionally, regardless of what
-        // typeRules says, since this is the one structural (non-type-based) signal.
-        if (breakingMarker || breakingFooter) {
+        if (parsed.breaking) {
+            // Breaking-ness always wins over the type-rule mapping below, per spec: "fix!:" or a
+            // fix with a BREAKING CHANGE footer is MAJOR, not PATCH - unconditionally, regardless
+            // of what typeRules says, since this is the one structural (non-type-based) signal.
             return Bump.MAJOR
         }
-        for (Bump bump : SEVERITY_DESCENDING) {
-            if (typeRules.getOrDefault(bump, Collections.<String> emptySet()).contains(type)) {
-                return bump
+        if (parsed.conforms) {
+            for (Bump bump : SEVERITY_DESCENDING) {
+                if (typeRules.getOrDefault(bump, Collections.<String> emptySet()).contains(parsed.type)) {
+                    return bump
+                }
             }
         }
-        // Syntactically conventional-commit-shaped, but a type that isn't in any configured set
-        // (a typo, or a team convention this ruleset doesn't know about) - equally non-conforming
-        // as a message that doesn't match the shape at all.
-        return warnNonConforming(trimmed)
+        // Either didn't conform to "type: description" at all, or conformed but used a type that
+        // isn't in any configured set (a typo, or a team convention this ruleset doesn't know about)
+        // - equally non-conforming either way.
+        return warnNonConforming(message.trim())
+    }
+
+    /**
+     * The syntactic parse of a commit message - type/scope/description/breaking-ness - independent
+     * of any type -> bump configuration. See {@link ParsedCommit}.
+     */
+    static ParsedCommit parse(String message) {
+        if (message == null || message.trim().isEmpty()) {
+            return new ParsedCommit(true, false, null, null, '', false)
+        }
+        String trimmed = message.trim()
+        int newlineIndex = trimmed.indexOf('\n')
+        String subjectLine = (newlineIndex == -1 ? trimmed : trimmed.substring(0, newlineIndex)).trim()
+        boolean breakingFooter = BREAKING_FOOTER_PATTERN.matcher(trimmed).find()
+
+        Matcher matcher = SUBJECT_PATTERN.matcher(subjectLine)
+        if (!matcher.matches()) {
+            return new ParsedCommit(false, false, null, null, subjectLine, breakingFooter)
+        }
+        String type = matcher.group(1).toLowerCase()
+        String scope = matcher.group(3)
+        boolean breakingMarker = matcher.group(4) == '!'
+        String description = matcher.group(5)
+        return new ParsedCommit(false, true, type, scope, description, breakingMarker || breakingFooter)
     }
 
     private static Bump warnNonConforming(String message) {

@@ -2,6 +2,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.duckasteroid.conventions.ChangelogScope;
 import io.github.duckasteroid.conventions.CommitAnalyzer;
 import io.github.duckasteroid.conventions.CommitAnalyzer.Bump;
 import io.github.duckasteroid.conventions.VersionResolver;
@@ -213,6 +214,64 @@ public class VersionResolverTest {
     rules.put(Bump.PATCH, patchWithSecurity);
 
     assertEquals("2.0.0", VersionResolver.resolveCandidateVersion(repo, PREFIX, "", List.of(), rules));
+  }
+
+  // ---- commitMessagesForChangelog ----
+
+  @Test
+  void changelogSinceLastReleaseCoversEverythingSinceTheFinalTag() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("feat: add a thing");
+    tag("v1.1.0-RC1");
+    commit("fix: a follow-up fix");
+    tag("v1.1.0-RC2");
+
+    List<String> messages = VersionResolver.commitMessagesForChangelog(
+        repo, PREFIX, "", List.of(), ChangelogScope.SINCE_LAST_RELEASE);
+    assertEquals(2, messages.size());
+    assertTrue(messages.stream().anyMatch(m -> m.contains("add a thing")));
+    assertTrue(messages.stream().anyMatch(m -> m.contains("a follow-up fix")));
+  }
+
+  @Test
+  void changelogSincePreviousRcOnlyCoversTheDeltaWhenAPreviousRcExists() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("feat: add a thing");
+    tag("v1.1.0-RC1");
+    commit("fix: a follow-up fix");
+    // Deliberately NOT tagging RC2 yet - in real usage, tagReleaseCandidate generates the changelog
+    // BEFORE minting the new RC tag, so "nearest reachable RC tag" from HEAD still finds RC1.
+
+    List<String> messages = VersionResolver.commitMessagesForChangelog(
+        repo, PREFIX, "", List.of(), ChangelogScope.SINCE_PREVIOUS_RC);
+    assertEquals(1, messages.size());
+    assertTrue(messages.get(0).contains("a follow-up fix"));
+  }
+
+  @Test
+  void changelogSincePreviousRcFallsBackToLastReleaseWhenNoPreviousRcExists() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("feat: the first RC's only commit");
+
+    List<String> messages = VersionResolver.commitMessagesForChangelog(
+        repo, PREFIX, "", List.of(), ChangelogScope.SINCE_PREVIOUS_RC);
+    assertEquals(1, messages.size());
+    assertTrue(messages.get(0).contains("the first RC's only commit"));
+  }
+
+  @Test
+  void changelogRespectsFallbackPrefixesForANewModule() throws Exception {
+    commit("chore: init");
+    tag("v2.0.0");
+    commit("feat: new module's first feature");
+
+    List<String> messages = VersionResolver.commitMessagesForChangelog(
+        repo, "newmod/v", "", List.of("v"), ChangelogScope.SINCE_LAST_RELEASE);
+    assertEquals(1, messages.size());
+    assertTrue(messages.get(0).contains("new module's first feature"));
   }
 
   private void commit(String message) throws IOException, InterruptedException {

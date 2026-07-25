@@ -1,3 +1,6 @@
+import io.github.duckasteroid.conventions.ChangelogExtension
+import io.github.duckasteroid.conventions.ChangelogGenerator
+import io.github.duckasteroid.conventions.ChangelogScope
 import io.github.duckasteroid.conventions.CommitAnalyzerExtension
 import io.github.duckasteroid.conventions.VersionResolver
 
@@ -5,22 +8,40 @@ import io.github.duckasteroid.conventions.VersionResolver
 // VERSIONING.md at the repo root. Apply alongside duckasteroid-java, which computes
 // project.ext.tagPrefix / project.ext.modulePath that these tasks reuse rather than recomputing.
 //
-// The two tasks are the release-time counterpart to duckasteroid-java's ordinary-build version
-// resolution: they don't just *compute* a version, they actually create and push a tag for it.
-// Both are plain Gradle tasks, runnable locally as well as from CI (see release-candidate.yml /
-// promote-release.yml) - release engineering shouldn't hard-depend on GitHub Actions being up.
+// Four tasks total - tagReleaseCandidate/promoteReleaseCandidate are the release-time counterpart to
+// duckasteroid-java's ordinary-build version resolution (they don't just *compute* a version, they
+// actually create and push a tag for it); changelogForReleaseCandidate/changelogForRelease generate
+// the matching release notes (see below). All four are plain Gradle tasks, runnable locally as well
+// as from CI (see examples/workflows/release-candidate.yml / promote-release.yml - templates for a
+// *consumer* project's own workflows, NOT live workflows in the gradle-convention-plugin repo itself,
+// which can't apply its own plugins to itself - see VERSIONING.md) - release engineering shouldn't
+// hard-depend on GitHub Actions being up.
 //
-// Both respect release.forceVersion as the ultimate backstop, same as the ordinary build version
-// resolution in duckasteroid-java: if set, it's used verbatim, no commit analysis runs at all. This
-// check is deliberately repeated here rather than shared with duckasteroid-java.gradle, so the
-// backstop can never be silently bypassed by one call site forgetting to check it.
-// See https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/
+// tagReleaseCandidate/promoteReleaseCandidate respect release.forceVersion as the ultimate backstop,
+// same as the ordinary build version resolution in duckasteroid-java: if set, it's used verbatim, no
+// commit analysis runs at all. This check is deliberately repeated here rather than shared with
+// duckasteroid-java.gradle, so the backstop can never be silently bypassed by one call site
+// forgetting to check it. See
+// https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/
+// (The changelog tasks have no forceVersion equivalent - release notes are generated from whatever
+// commits are actually there regardless of what version they're attached to.)
 //
 // Task actions below capture everything they need (tagPrefix, modulePath, projectDir, the
 // forceVersion property) as plain local values during task *configuration*, and shell out via
 // plain ProcessBuilder rather than project.exec at *execution* time (inside doLast) - accessing the
 // live Project object from a task action at execution time is unsupported under the configuration
 // cache, so nothing in a doLast block below may reference `project` directly.
+//
+// changelogForReleaseCandidate / changelogForRelease (see the `changelog { }` extension below)
+// generate release notes but don't tag anything - deliberately separate from tagReleaseCandidate/
+// promoteReleaseCandidate so notes can be previewed locally before actually cutting a release, and
+// so a CI job can generate notes, then tag, in that order (changelogForReleaseCandidate must run
+// BEFORE tagReleaseCandidate: it looks for the *previous* release-candidate tag reachable from HEAD,
+// which would incorrectly find the *new* RC tag instead if that tag already existed by the time it
+// ran).
+
+def changelogExtension = project.extensions.create('changelog', ChangelogExtension)
+changelogExtension.rcScope.convention(ChangelogScope.SINCE_LAST_RELEASE)
 
 tasks.register('tagReleaseCandidate') {
     group = 'release'
@@ -64,6 +85,45 @@ tasks.register('promoteReleaseCandidate') {
         String tag = forceVersion ? "${tagPrefix}${forceVersion}" : VersionResolver.promoteTag(repoDir, tagPrefix)
         createAndPushTag(repoDir, tag)
     }
+}
+
+tasks.register('changelogForReleaseCandidate') {
+    group = 'release'
+    description = 'Generates release-candidate notes (Markdown, written to build/changelog.md), ' +
+            'scoped by changelog.rcScope (default: everything since the last final release).'
+    def tagPrefix = project.ext.tagPrefix
+    def modulePath = project.ext.modulePath
+    def repoDir = project.projectDir
+    def typeRules = project.extensions.getByType(CommitAnalyzerExtension).toTypeRules()
+    def rcScope = project.extensions.getByType(ChangelogExtension).rcScope.get()
+    def outputFile = project.layout.buildDirectory.file('changelog.md').get().asFile
+    doLast {
+        List<String> messages = VersionResolver.commitMessagesForChangelog(repoDir, tagPrefix, modulePath, ['v'], rcScope)
+        writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
+    }
+}
+
+tasks.register('changelogForRelease') {
+    group = 'release'
+    description = 'Generates final release notes (Markdown, written to build/changelog.md), covering ' +
+            'everything since the last final release regardless of changelog.rcScope.'
+    def tagPrefix = project.ext.tagPrefix
+    def modulePath = project.ext.modulePath
+    def repoDir = project.projectDir
+    def typeRules = project.extensions.getByType(CommitAnalyzerExtension).toTypeRules()
+    def outputFile = project.layout.buildDirectory.file('changelog.md').get().asFile
+    doLast {
+        List<String> messages = VersionResolver.commitMessagesForChangelog(
+                repoDir, tagPrefix, modulePath, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
+        writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
+    }
+}
+
+/** Writes generated changelog Markdown to outputFile, creating parent directories as needed. */
+def writeChangelog(File outputFile, String changelog) {
+    outputFile.parentFile.mkdirs()
+    outputFile.text = changelog
+    println "Changelog written to ${outputFile}"
 }
 
 /** Creates an annotated tag at HEAD and pushes it to `origin` - the only state-mutating step here. */

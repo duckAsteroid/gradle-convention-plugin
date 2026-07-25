@@ -1,3 +1,7 @@
+# TEMPLATE - not a live workflow for this repo; see the matching note in release-candidate.yml in
+# this same directory for why. This shows what a *consumer* project applying
+# duckasteroid-release-flow should put in its own .github/workflows/.
+#
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
@@ -33,6 +37,11 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      # Must run BEFORE promoting: it looks for the last reachable *final* release tag, which the
+      # about-to-be-created final tag would otherwise shadow (HEAD would already be sitting on it).
+      - name: Generate release notes
+        run: ./gradlew changelogForRelease
+
       - name: Promote release candidate to final
         run: ./gradlew promoteReleaseCandidate
 
@@ -43,7 +52,7 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ steps.tag.outputs.name }}" --generate-notes
+        run: gh release create "${{ steps.tag.outputs.name }}" --notes-file build/changelog.md
 
       - name: Publish package
         uses: gradle/gradle-build-action@v2
