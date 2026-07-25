@@ -8,6 +8,7 @@ The base convention plugin for Java projects. Apply it via `id 'duckasteroid-jav
 * Java 25 toolchain by default, overridable via `-Pduckasteroid.java.version` (or a `gradle.properties` entry)
 * Group `io.github.duckasteroid`
 * Versioning derived entirely from git — no version string is ever committed to `build.gradle`
+  (see [VERSIONING.md](VERSIONING.md) for the full explanation, worked examples, and the release flow)
   * The expected tag prefix is derived from the Gradle project path, so each project's version is `${gradle project path}/v{number}`. For example a subproject at `:sub:module` looks for tags like `sub/module/v1.2.3`, while the root project just looks for `v1.2.3`
   * This makes versioning **multi-module friendly**: each module in a multi-project build can be tagged and released independently, without bumping the version of unrelated modules in the same repo
     * A module with no tag of its own yet falls back to the root project's plain `v` tag as its starting point
@@ -29,6 +30,17 @@ The base convention plugin for Java projects. Apply it via `id 'duckasteroid-jav
   * `-Prelease.forceVersion=X.Y.Z` remains the ultimate backstop, exactly as documented by axion-release
     ([force_version docs](https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/)): if
     set, none of the above analysis runs at all and the version is used verbatim.
+  * Which commit types map to which bump is configurable via the `commitAnalyzer { }` extension —
+    `majorTypes`/`minorTypes`/`patchTypes`/`noBumpTypes`, each a `SetProperty<String>` pre-populated with the
+    built-in defaults (`majorTypes` starts empty; major is normally driven by `!`/`BREAKING CHANGE:` instead).
+    Append to one with `.add(...)`/`.addAll(...)`, or replace it outright with `.set(...)`:
+    ```groovy
+    commitAnalyzer {
+        majorTypes.add('security')  // "security: ..." commits are always a major bump
+        minorTypes.add('perf2')     // an extra type that also means minor
+        noBumpTypes.set(['docs'])   // REPLACES the default no-bump set - only 'docs' is no-bump now
+    }
+    ```
   * Useful tasks: `./gradlew currentVersion` shows axion-release's own (unrelated) tag-based computation; the
     project's actual `version` is printed by any normal task, e.g. `./gradlew properties -q | grep '^version:'`.
     See `duckasteroid-release-flow` below for minting actual release tags.

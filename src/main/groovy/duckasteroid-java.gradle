@@ -1,6 +1,8 @@
 import org.gradle.api.JavaVersion
 import org.gradle.api.publish.maven.MavenPublication
 import org.eclipse.jgit.lib.RepositoryBuilder
+import io.github.duckasteroid.conventions.CommitAnalyzer
+import io.github.duckasteroid.conventions.CommitAnalyzerExtension
 import io.github.duckasteroid.conventions.VersionResolver
 
 plugins {
@@ -33,9 +35,12 @@ while (customPrefix.startsWith("/")) {
 }
 println("Project '${project.name}' custom prefix: ${customPrefix}")
 
-// Multi-project friendly versioning strategy - axion-release still owns tag discovery/creation
-// and remains the backstop for release.forceVersion (see below); it's just no longer what
-// computes project.version day-to-day.
+// Multi-project friendly versioning strategy. NOTE: this scmVersion block configures
+// axion-release's OWN tag prefix/fallback/initial-version behavior, which is what runs when
+// release.forceVersion is set (see below) - axion-release is still applied and still fully
+// configured, it's just not what computes project.version on an ordinary build any more. Keeping
+// this block correct matters for the forceVersion backstop path even though VersionResolver has
+// its own, independently-implemented equivalent of the prefix/fallbackPrefixes concepts below.
 scmVersion {
     tag {
         prefix.set(customPrefix)
@@ -70,26 +75,65 @@ try {
     // Not a git checkout (or no 'origin' remote) - keep the fallback values above
 }
 
+// Gradle-facing configuration for which commit types map to which version bump - see
+// CommitAnalyzerExtension for the DSL and VERSIONING.md for the full rationale. Each property is
+// pre-populated with the corresponding built-in default from CommitAnalyzer.DEFAULT_TYPE_RULES; a
+// consumer can append to any of them (commitAnalyzer { minorTypes.add('perf2') }) or replace one
+// outright (commitAnalyzer { noBumpTypes.set(['docs']) }).
+//
+// Deliberately uses addAll(...) here, NOT convention(...): Property.convention() only supplies a
+// fallback value used while NOTHING has been explicitly added/set - the moment a consumer calls
+// .add(...), Gradle discards the convention entirely rather than appending to it, so
+// commitAnalyzer { minorTypes.add('perf2') } would silently end up as just ['perf2'], losing the
+// default 'feat'. Pre-populating via addAll(...) instead makes the defaults part of the property's
+// actual (explicit) value from the start, so a later .add(...) genuinely appends to them, while
+// .set(...) still replaces the whole value as expected either way.
+def commitAnalyzerExtension = project.extensions.create('commitAnalyzer', CommitAnalyzerExtension)
+commitAnalyzerExtension.majorTypes.addAll(CommitAnalyzer.DEFAULT_TYPE_RULES[CommitAnalyzer.Bump.MAJOR])
+commitAnalyzerExtension.minorTypes.addAll(CommitAnalyzer.DEFAULT_TYPE_RULES[CommitAnalyzer.Bump.MINOR])
+commitAnalyzerExtension.patchTypes.addAll(CommitAnalyzer.DEFAULT_TYPE_RULES[CommitAnalyzer.Bump.PATCH])
+commitAnalyzerExtension.noBumpTypes.addAll(CommitAnalyzer.DEFAULT_TYPE_RULES[CommitAnalyzer.Bump.NONE])
+
 // SCM-derived version: a Java/Groovy port of the semantic-release commit-analyzer concept - the
 // last final release tag reachable from HEAD, bumped by the conventional commits since it
-// (feat -> minor, fix/perf -> patch, '!'/BREAKING CHANGE -> major, highest wins), decorated with
-// -SNAPSHOT unless HEAD sits exactly on a real tag. See VersionResolver for details.
+// (feat -> minor, fix/perf -> patch, known-no-bump types -> none, '!'/BREAKING CHANGE -> major,
+// non-conforming commits -> patch + a stderr warning, highest wins - all configurable via the
+// commitAnalyzer { } extension above), decorated with -SNAPSHOT unless HEAD sits exactly on a real
+// tag. Full explanation, worked examples, and the develop/release/main flow this is designed for:
+// see VERSIONING.md at the repo root. The actual git-walking logic lives in
+// VersionResolver/CommitAnalyzer, kept out of this script on purpose so it's a plain, independently
+// unit-testable class rather than closures buried in a .gradle file.
 //
 // release.forceVersion is the ultimate backstop: if set, none of the above runs at all - axion's
 // own native handling is used untouched. "Don't do anything clever, just release whatever I say
 // the number is." See https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/
-def forceVersion = project.findProperty('release.forceVersion')
+// This same forceVersion check is repeated (not shared/refactored out) everywhere a version gets
+// computed - here, and again in duckasteroid-release-flow.gradle's two tasks - deliberately, so the
+// backstop can never be silently bypassed by one of those call sites forgetting to check it.
 // The module's path relative to the repo root (e.g. "sub/module", "" at root) - commits are only
 // counted towards this project's version if they touched files under this path, so unrelated
 // modules in the same monorepo don't bump each other's version.
 def modulePath = rootProject.projectDir.toPath().relativize(project.projectDir.toPath()).toString()
-version = forceVersion ? scmVersion.version : resolveScmDerivedVersion(customPrefix, ghBranch, modulePath)
+// Deferred to afterEvaluate: a consumer's own commitAnalyzer { } customization (in their
+// build.gradle, below the `plugins { id 'duckasteroid-java' }` line) hasn't run yet at the point
+// this script itself finishes executing - applying a precompiled script plugin runs this whole
+// file synchronously as part of processing the consumer's `plugins { }` block, before the rest of
+// their build.gradle below it even starts. Reading commitAnalyzerExtension.toTypeRules() here
+// directly (not in afterEvaluate) would always see the untouched defaults, silently ignoring any
+// commitAnalyzer { } block the consumer wrote.
+project.afterEvaluate {
+    def forceVersion = project.findProperty('release.forceVersion')
+    version = forceVersion ? scmVersion.version :
+            resolveScmDerivedVersion(customPrefix, ghBranch, modulePath, commitAnalyzerExtension.toTypeRules())
+}
 
-def resolveScmDerivedVersion(String tagPrefix, String branchName, String modulePath) {
+def resolveScmDerivedVersion(String tagPrefix, String branchName, String modulePath,
+                              Map<CommitAnalyzer.Bump, Set<String>> typeRules) {
     try {
         // Falls back to the plain 'v' root prefix if this module has no tag of its own yet,
         // mirroring scmVersion.tag.fallbackPrefixes above.
-        return VersionResolver.resolveBuildVersion(project.projectDir, tagPrefix, branchName, modulePath, ['v'])
+        return VersionResolver.resolveBuildVersion(
+                project.projectDir, tagPrefix, branchName, modulePath, ['v'], typeRules)
     } catch (Exception ignored) {
         // No real git checkout to read (e.g. an in-memory ProjectBuilder test project) - fall
         // back to axion's own resolution, same as the ghOwner/ghBranch detection above.

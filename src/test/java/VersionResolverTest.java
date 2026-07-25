@@ -2,12 +2,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.duckasteroid.conventions.CommitAnalyzer;
+import io.github.duckasteroid.conventions.CommitAnalyzer.Bump;
 import io.github.duckasteroid.conventions.VersionResolver;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -155,6 +161,58 @@ public class VersionResolverTest {
     assertEquals("1.1.0", VersionResolver.resolveCandidateVersion(repo, PREFIX, "moduleB", List.of()));
     // Unscoped (root, no modulePath): highest bump across ALL commits wins, as before.
     assertEquals("1.1.0", VersionResolver.resolveCandidateVersion(repo, PREFIX, "", List.of()));
+  }
+
+  @Test
+  void resolveCandidateVersionUsesCustomMajorTypes() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("security: patch a CVE");
+
+    Map<Bump, Set<String>> defaultRules = CommitAnalyzer.DEFAULT_TYPE_RULES;
+    assertEquals(
+        "1.0.1",
+        VersionResolver.resolveCandidateVersion(repo, PREFIX, "", List.of(), defaultRules),
+        "without configuring 'security' as a major type, it's non-conforming -> PATCH");
+
+    Map<Bump, Set<String>> withSecurityAsMajor = new HashMap<>(defaultRules);
+    withSecurityAsMajor.put(Bump.MAJOR, Set.of("security"));
+    assertEquals(
+        "2.0.0",
+        VersionResolver.resolveCandidateVersion(repo, PREFIX, "", List.of(), withSecurityAsMajor));
+  }
+
+  @Test
+  void resolveBuildVersionUsesCustomNoBumpTypesOverride() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("chore: dependency bump");
+
+    // Default: 'chore' is a no-bump type, so the build version doesn't move past the tag.
+    assertEquals("1.0.0-SNAPSHOT", VersionResolver.resolveBuildVersion(repo, PREFIX, "release"));
+
+    // Override noBumpTypes to just ['docs'] - 'chore' is no longer recognized at all, so it
+    // becomes non-conforming -> PATCH bump instead.
+    Map<Bump, Set<String>> customRules = new HashMap<>(CommitAnalyzer.DEFAULT_TYPE_RULES);
+    customRules.put(Bump.NONE, Set.of("docs"));
+    assertEquals(
+        "1.0.1-SNAPSHOT",
+        VersionResolver.resolveBuildVersion(repo, PREFIX, "release", "", List.of(), customRules));
+  }
+
+  @Test
+  void resolveCandidateVersionTypeInBothMajorAndPatchSetsResolvesToMajor() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("security: patch a CVE");
+
+    Map<Bump, Set<String>> rules = new HashMap<>(CommitAnalyzer.DEFAULT_TYPE_RULES);
+    rules.put(Bump.MAJOR, Set.of("security"));
+    Set<String> patchWithSecurity = new HashSet<>(CommitAnalyzer.DEFAULT_TYPE_RULES.get(Bump.PATCH));
+    patchWithSecurity.add("security");
+    rules.put(Bump.PATCH, patchWithSecurity);
+
+    assertEquals("2.0.0", VersionResolver.resolveCandidateVersion(repo, PREFIX, "", List.of(), rules));
   }
 
   private void commit(String message) throws IOException, InterruptedException {

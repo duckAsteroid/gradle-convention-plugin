@@ -42,20 +42,41 @@ The convention plugins are split so consumers can opt into only what they want, 
     according to the Conventional Commits messages since that tag *that touched this module's own directory*
     (`modulePath`, computed as `project.projectDir` relativized against `rootProject.projectDir` and passed
     through; equivalent to `git log <range> -- modulePath`, via JGit's `Git.log().addPath(...)` porcelain
-    command) — `feat` → minor, `fix`/`perf` → patch, `!` marker or `BREAKING CHANGE:` footer → major, highest
-    bump across the qualifying commits wins. This is what keeps a `feat:` commit in one subproject from
-    bumping an unrelated sibling subproject's version in the same monorepo. Decorated `-SNAPSHOT` (optionally
-    with the sanitized branch name folded in on feature branches) unless `HEAD` sits exactly on a real tag.
-    Both classes are plain Groovy classes with no Gradle dependency and are unit-tested directly
-    (`CommitAnalyzerTest`, `VersionResolverTest` — the latter builds a real throwaway git repo per test rather
-    than mocking git, including fixtures with real file changes under different subdirectories to exercise the
-    path-scoping). They talk to git via **JGit**, not the `git` CLI, specifically because this computation runs
-    at Gradle *configuration* time (`version = ...`), where starting an external process is incompatible with
-    the configuration cache — axion-release's own JGit usage is why the pre-existing `ghOwner`/`ghBranch`
+    command) — which type maps to which bump is *data*, not hardcoded logic: a
+    `Map<CommitAnalyzer.Bump, Set<String>>` (`CommitAnalyzer.DEFAULT_TYPE_RULES` by default — `feat` → minor,
+    `fix`/`perf` → patch, `docs`/`style`/`refactor`/`test`/`chore`/`build`/`ci` → none, `majorTypes` empty by
+    default), checked most-to-least-severe so a type configured into more than one level resolves to the
+    highest. A `!` marker or `BREAKING CHANGE:` footer always forces major regardless of typeRules (that
+    detection is structural, not configurable). Anything that doesn't conform to Conventional Commits at all
+    (or uses a type outside every configured set) → **patch, with a warning on stderr** (deliberately *not*
+    silently ignored, unlike the semantic-release original — see VERSIONING.md), highest bump across the
+    qualifying commits wins. This is what keeps a `feat:` commit in one subproject from bumping an unrelated
+    sibling subproject's version in the same monorepo. Decorated `-SNAPSHOT` (optionally with the sanitized
+    branch name folded in on feature branches) unless `HEAD` sits exactly on a real tag. Both classes are
+    plain Groovy classes with no Gradle dependency and are unit-tested directly (`CommitAnalyzerTest`,
+    `VersionResolverTest` — the latter builds a real throwaway git repo per test rather than mocking git,
+    including fixtures with real file changes under different subdirectories to exercise the path-scoping).
+    They talk to git via **JGit**, not the `git` CLI, specifically because this computation runs at Gradle
+    *configuration* time (`version = ...`), where starting an external process is incompatible with the
+    configuration cache — axion-release's own JGit usage is why the pre-existing `ghOwner`/`ghBranch`
     detection below has always worked the same way.
   - `modulePath` is also exposed as `project.ext.modulePath`, next to `project.ext.tagPrefix`, for
     `duckasteroid-release-flow`'s `tagReleaseCandidate` task to reuse (it calls `resolveCandidateVersion` with
-    the same `modulePath`/`fallbackPrefixes` so RC candidate computation matches ordinary-build computation).
+    the same `modulePath`/`fallbackPrefixes`/`typeRules` so RC candidate computation matches ordinary-build
+    computation).
+  - The type-rules map is configurable per project via the `commitAnalyzer { }` extension
+    (`CommitAnalyzerExtension.groovy`, registered by `duckasteroid-java.gradle`): four
+    `SetProperty<String>` (`majorTypes`/`minorTypes`/`patchTypes`/`noBumpTypes`), each pre-populated with
+    `addAll(...)` from the corresponding `DEFAULT_TYPE_RULES` entry — deliberately `addAll(...)` and **not**
+    `convention(...)`, since a `Property`'s convention is discarded (not appended to) the moment a consumer
+    calls `.add(...)`, which would otherwise make `commitAnalyzer { minorTypes.add('perf2') }` silently lose
+    the default `'feat'`. `CommitAnalyzerExtension.toTypeRules()` materializes the four properties into the
+    `Map<Bump, Set<String>>` VersionResolver/CommitAnalyzer actually take. **The `version = ...` assignment
+    itself is wrapped in `project.afterEvaluate { }`** for exactly this feature's sake — applying a
+    precompiled script plugin runs the whole `duckasteroid-java.gradle` script synchronously as part of the
+    consumer's `plugins { }` block, before the rest of their `build.gradle` (including any `commitAnalyzer { }`
+    customization) has executed; computing the version eagerly (not deferred) would always see the untouched
+    defaults.
   - `-Prelease.forceVersion=X.Y.Z` is the ultimate backstop: if set, none of the above analysis runs at all and
     axion-release's own native handling (`scmVersion.version`) is used verbatim — see
     [axion's force_version docs](https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/).
@@ -124,6 +145,10 @@ The convention plugins are split so consumers can opt into only what they want, 
     that rename happens.
 - `src/test/java/JavaConventionsPluginTest.java` — uses `ProjectBuilder` + Gradle TestKit to apply the plugin to
   an in-memory project and assert specific plugins/config landed, rather than a full end-to-end build.
+- `src/test/java/CommitAnalyzerExtensionTest.java` — same `ProjectBuilder` approach, specifically for the
+  `commitAnalyzer { }` extension: asserts its defaults mirror `CommitAnalyzer.DEFAULT_TYPE_RULES`, that
+  `.add(...)` appends onto the default rather than replacing it (the `addAll`-not-`convention` behavior above),
+  that `.set(...)` replaces it, and that the four properties can be configured independently.
 - `build.gradle` (root) — builds the plugin JAR itself: applies `groovy-gradle-plugin`, `com.gradle.plugin-publish`,
   `com.github.ben-manes.versions`, and `axion-release` for its own versioning. Targets Java 21 for the plugin
   project itself — separate from the toolchain version `duckasteroid-java.gradle` configures for consumers.
@@ -141,6 +166,11 @@ The convention plugins are split so consumers can opt into only what they want, 
     classpath than plain class files in the same source set).
 
 ## Versioning scheme (important, non-obvious)
+
+Full detail (worked examples, the develop/release/main flow, why JGit not the `git` CLI) lives in
+`VERSIONING.md` at the repo root — read that before changing anything in `VersionResolver.groovy`,
+`CommitAnalyzer.groovy`, or the version-resolution parts of `duckasteroid-java.gradle`/
+`duckasteroid-release-flow.gradle`. Summary:
 
 A consumer project applying `duckasteroid-java` gets its version computed by `VersionResolver` from
 Conventional Commits since the last final release tag (see Architecture above) — not directly from

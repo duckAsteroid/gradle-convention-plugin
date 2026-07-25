@@ -1,18 +1,26 @@
+import io.github.duckasteroid.conventions.CommitAnalyzerExtension
 import io.github.duckasteroid.conventions.VersionResolver
 
-// Opt-in release-engineering tasks for the develop -> release -> main flow. Apply alongside
-// duckasteroid-java, which computes project.ext.tagPrefix that these tasks reuse. Both tasks are
-// plain Gradle tasks, runnable locally as well as from CI - release engineering shouldn't
-// hard-depend on GitHub Actions being up.
+// Opt-in release-engineering tasks for the develop -> release -> main flow described in
+// VERSIONING.md at the repo root. Apply alongside duckasteroid-java, which computes
+// project.ext.tagPrefix / project.ext.modulePath that these tasks reuse rather than recomputing.
+//
+// The two tasks are the release-time counterpart to duckasteroid-java's ordinary-build version
+// resolution: they don't just *compute* a version, they actually create and push a tag for it.
+// Both are plain Gradle tasks, runnable locally as well as from CI (see release-candidate.yml /
+// promote-release.yml) - release engineering shouldn't hard-depend on GitHub Actions being up.
 //
 // Both respect release.forceVersion as the ultimate backstop, same as the ordinary build version
-// resolution in duckasteroid-java: if set, it's used verbatim, no commit analysis runs at all.
+// resolution in duckasteroid-java: if set, it's used verbatim, no commit analysis runs at all. This
+// check is deliberately repeated here rather than shared with duckasteroid-java.gradle, so the
+// backstop can never be silently bypassed by one call site forgetting to check it.
 // See https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/
 //
-// Task actions below capture everything they need (tagPrefix, projectDir, the forceVersion
-// property) as plain local values during task configuration, and shell out via plain
-// ProcessBuilder rather than project.exec - accessing the live Project object from a task action
-// at execution time is unsupported under the configuration cache.
+// Task actions below capture everything they need (tagPrefix, modulePath, projectDir, the
+// forceVersion property) as plain local values during task *configuration*, and shell out via
+// plain ProcessBuilder rather than project.exec at *execution* time (inside doLast) - accessing the
+// live Project object from a task action at execution time is unsupported under the configuration
+// cache, so nothing in a doLast block below may reference `project` directly.
 
 tasks.register('tagReleaseCandidate') {
     group = 'release'
@@ -22,9 +30,19 @@ tasks.register('tagReleaseCandidate') {
     def modulePath = project.ext.modulePath
     def repoDir = project.projectDir
     def forceVersion = project.findProperty('release.forceVersion')
+    // Captured now (configuration time) as a plain Map, not the live extension object - see the
+    // config-cache note in the file-level comment above.
+    def typeRules = project.extensions.getByType(CommitAnalyzerExtension).toTypeRules()
     doLast {
+        // Same candidate computation as an ordinary build (VersionResolver.resolveCandidateVersion,
+        // sharing the fallback-to-root-'v' and path-scoped commit-filtering behavior), just without
+        // the -SNAPSHOT decoration - this candidate is what actually gets tagged below, not just
+        // displayed. Intended to run on every push to the `release` branch: the first invocation for
+        // a given candidate version mints "-RC1", subsequent ones on later commits mint "-RC2",
+        // "-RC3", etc. (see VersionResolver.nextReleaseCandidateTag), with no manual version
+        // bookkeeping required anywhere.
         String candidate = forceVersion ?:
-                VersionResolver.resolveCandidateVersion(repoDir, tagPrefix, modulePath, ['v'])
+                VersionResolver.resolveCandidateVersion(repoDir, tagPrefix, modulePath, ['v'], typeRules)
         String tag = VersionResolver.nextReleaseCandidateTag(repoDir, tagPrefix, candidate)
         createAndPushTag(repoDir, tag)
     }
@@ -38,16 +56,28 @@ tasks.register('promoteReleaseCandidate') {
     def repoDir = project.projectDir
     def forceVersion = project.findProperty('release.forceVersion')
     doLast {
+        // No modulePath/fallback needed here, unlike tagReleaseCandidate above: this doesn't derive
+        // a version from commits at all, it just strips "-RCn" off whichever RC tag is nearest
+        // reachable from HEAD (VersionResolver.promoteTag) - by the time you're promoting, that tag
+        // already exists, already under this module's own tagPrefix. Intended to run on every push
+        // to `main` once an accepted RC has been merged there from `release`.
         String tag = forceVersion ? "${tagPrefix}${forceVersion}" : VersionResolver.promoteTag(repoDir, tagPrefix)
         createAndPushTag(repoDir, tag)
     }
 }
 
+/** Creates an annotated tag at HEAD and pushes it to `origin` - the only state-mutating step here. */
 def createAndPushTag(File repoDir, String tag) {
     runGit(repoDir, 'tag', '-a', tag, '-m', "Release ${tag}")
     runGit(repoDir, 'push', 'origin', tag)
 }
 
+/**
+ * Plain ProcessBuilder rather than project.exec (see file-level comment above for why) or
+ * VersionResolver's JGit plumbing (pushing a tag needs real push credentials - the `git` CLI
+ * transparently reuses whatever's already configured, both locally and via actions/checkout's
+ * persisted GITHUB_TOKEN in CI, with no extra credential wiring needed here).
+ */
 def runGit(File repoDir, String... args) {
     List<String> command = ['git'] + (args as List<String>)
     Process process = new ProcessBuilder(command).directory(repoDir).redirectErrorStream(true).start()
