@@ -1,5 +1,6 @@
-# TEMPLATE - not a live workflow for this repo; see the matching note in release-candidate.yml in
-# this same directory for why. This shows what a *consumer* project applying
+# GENERIC TEMPLATE for other consumer projects - not the copy this repo itself runs; see the
+# matching note in release-candidate.yml in this same directory for why. This repo's own live copy
+# is .github/workflows/promote-release.yml. This shows what any *consumer* project applying
 # duckasteroid-release-flow should put in its own .github/workflows/.
 #
 # This workflow uses actions that are not certified by GitHub.

@@ -1,9 +1,11 @@
-# TEMPLATE - not a live workflow for this repo. This repo's own build.gradle applies plain
-# axion-release directly, not duckasteroid-java/duckasteroid-release-flow (a Gradle project can't
-# apply a precompiled script plugin to the same project that builds it - it's circular), so this
-# repo's own release process stays on publish.yml, triggered by a manually-pushed tag. This file
-# shows what a *consumer* project applying duckasteroid-release-flow should put in its own
-# .github/workflows/ to get the develop -> release -> main flow described in VERSIONING.md.
+# GENERIC TEMPLATE for other consumer projects - not the copy this repo itself runs. This repo
+# dogfoods these same conventions by depending on duckasteroid-java/duckasteroid-release-flow as a
+# *published* GitHub Packages artifact (see build.gradle/settings.gradle) rather than the in-source
+# precompiled script plugin (which really can't apply to the project that builds it - circular).
+# Its own live copy of this workflow is .github/workflows/release-candidate.yml, with one
+# repo-specific difference: the Java toolchain version. This file shows what any *consumer* project
+# applying duckasteroid-release-flow should put in its own .github/workflows/ to get the
+# develop -> release -> main flow described in VERSIONING.md.
 #
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
@@ -15,9 +17,9 @@
 # release.forceVersion if set), mints the next -RCn tag, and this job then cuts a GitHub
 # pre-release and publishes it - all in the same job.
 #
-# Deliberately self-contained rather than relying on the tag push to trigger publish.yml: a tag
-# pushed with the default GITHUB_TOKEN does not trigger other workflow runs (see publish.yml's own
-# comments), so chaining into it here would silently never fire.
+# Deliberately self-contained rather than relying on the tag push to trigger a separate publish
+# workflow: a tag pushed with the default GITHUB_TOKEN does not trigger other workflow runs, so
+# chaining into one here would silently never fire.
 name: Tag and publish a release candidate
 on:
   push:

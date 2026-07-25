@@ -173,36 +173,42 @@ computed candidate version into an actual, pushed git tag, plus matching release
 
 All four are plain Gradle tasks (`./gradlew tagReleaseCandidate`, etc.), runnable locally as well as
 from CI - release engineering doesn't hard-depend on GitHub Actions being available.
+[`.github/workflows/release-candidate.yml`](.github/workflows/release-candidate.yml) and
+[`promote-release.yml`](.github/workflows/promote-release.yml) are this repo's own **live** workflows;
 [`examples/workflows/release-candidate.yml`](examples/workflows/release-candidate.yml) and
-[`promote-release.yml`](examples/workflows/promote-release.yml) show the full CI wiring - **templates
-for a consumer project's own `.github/workflows/`**, not live workflows in this repo (see the "Why
-this repo doesn't dogfood its own plugin" section below for why). Each is a single, self-contained
-job (changelog, tag, cut the GitHub Release with `--notes-file`, `gradlew publish`) rather than
-relying on the pushed tag to trigger a separate workflow, because a tag pushed with the default
-`GITHUB_TOKEN` doesn't trigger other workflow runs - the same reason [`publish.yml`](.github/workflows/publish.yml)
-combines release-creation and publishing into one job.
+[`promote-release.yml`](examples/workflows/promote-release.yml) are the **generic templates** for a
+consumer project's own `.github/workflows/` (identical apart from the Java toolchain version - see
+"Dogfooding this repo's own plugin" below). Each is a single, self-contained job (changelog, tag, cut
+the GitHub Release with `--notes-file`, `gradlew publish`) rather than relying on the pushed tag to
+trigger a separate workflow, because a tag pushed with the default `GITHUB_TOKEN` doesn't trigger
+other workflow runs.
 
-`publish.yml` itself is untouched by any of this - it still triggers on any `v*` tag pushed directly
-(by hand, or by anything else), and remains the fallback entry point for a manually-pushed tag.
+There's no separate manual-tag-triggered publish workflow any more - the old `publish.yml` (triggered
+on any `v*` tag pushed directly) was retired once `release-candidate.yml`/`promote-release.yml` came
+to cover both the RC and final-release cases via the `develop` → `release` → `main` flow.
 
-## Why this repo doesn't dogfood its own plugin
+## Dogfooding this repo's own plugin
 
 `duckasteroid-java`/`duckasteroid-release-flow` are defined *in this repo* (`src/main/groovy/*.gradle`)
-but this repo's own `build.gradle` never applies them to itself - it uses plain `axion-release`
-directly, and its own release process is still just "push a `v*` tag, `publish.yml` handles the
-rest." This is a hard constraint, not a stylistic choice: a Gradle project **cannot** apply a
-precompiled script plugin to the same project that builds it, because the plugin has to be compiled
-before it can be applied, but compiling it depends on the very build script that would be applying
-it. Confirmed empirically - adding `id 'duckasteroid-java'` to this repo's own `plugins { }` block
-fails with `Plugin [id: 'duckasteroid-java'] was not found... Included Builds (No included builds
-contain this plugin)`. Making this work for real would mean restructuring this single-project repo
-into a multi-project/composite-build layout, which wasn't judged worth the complexity.
+and this repo's own `build.gradle` **does** apply both to itself, pinned to a specific already-published
+version (e.g. `1.0.0-RC4`), resolved from this repo's own GitHub Packages feed via
+`settings.gradle`'s `io.github.duckasteroid.github-packages-settings` bootstrap - the same mechanism
+any other consumer uses.
 
-Practical upshot: [`examples/workflows/release-candidate.yml`](examples/workflows/release-candidate.yml)
-and [`promote-release.yml`](examples/workflows/promote-release.yml) are **templates** showing what a
-*consumer* project applying `duckasteroid-release-flow` should put in its own `.github/workflows/` -
-they live under `examples/`, not `.github/workflows/`, specifically so they can never be triggered
-(and fail) in this repo.
+This is different from applying the *in-source* precompiled script plugin to the project that builds
+it, which genuinely is circular and impossible: the plugin has to be compiled before it can be
+applied, but compiling it depends on the very build script that would be applying it (confirmed
+empirically - `id 'duckasteroid-java'` with no version, resolving from `src/main/groovy` in the same
+build, fails with `Plugin [id: 'duckasteroid-java'] was not found... Included Builds (No included
+builds contain this plugin)`). Depending on the *published* artifact instead sidesteps that entirely
+- at the cost of this repo always dogfooding a released version of its own conventions rather than
+whatever's on `HEAD`, so a change to `duckasteroid-java.gradle` doesn't affect this repo's own build
+until a new version has actually been published and the pinned version bumped.
+
+`project.version` for this repo's own root project is still computed by the plain
+`version = scmVersion.version` line in `build.gradle` (raw axion-release), not by `VersionResolver` -
+dogfooding covers the Java toolchain and the release-flow tasks, but this project's own version
+computation hasn't been switched over to the commit-analysis scheme it hands out to consumers.
 
 ## Generating release notes
 

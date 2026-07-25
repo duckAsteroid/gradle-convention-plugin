@@ -17,7 +17,8 @@ files into applicable plugins. Each `.gradle` file's basename becomes its plugin
 **Publishing target is deliberately GitHub Packages only.** `com.gradle.plugin-publish` is applied (for the plugin
 metadata/marker artifacts it generates), but nothing invokes `./gradlew publishPlugins`, and that's intentional —
 this suite is not meant to be published to the Gradle Plugin Portal, only to GitHub Packages via `./gradlew publish`
-(see `.github/workflows/publish.yml`). Don't wire up `publishPlugins` without checking with the author first.
+(see `.github/workflows/release-candidate.yml` / `promote-release.yml`). Don't wire up `publishPlugins` without
+checking with the author first.
 
 ## Architecture
 
@@ -145,8 +146,10 @@ The convention plugins are split so consumers can opt into only what they want, 
     cycle so far) or `SINCE_PREVIOUS_RC` (just the delta, falling back to `SINCE_LAST_RELEASE` automatically
     when there's no previous RC yet)). `changelogForRelease` always uses `SINCE_LAST_RELEASE` — the final
     release's notes should be the complete picture regardless of that setting.
-  - `examples/workflows/release-candidate.yml` and `promote-release.yml` are **templates**, not live workflows
-    in this repo's own `.github/workflows/` — see the important note below about why.
+  - `examples/workflows/release-candidate.yml` and `promote-release.yml` are **generic templates** for other
+    consumer projects. This repo also runs live copies of the same two workflows in its own
+    `.github/workflows/` — see the important note below about how that's possible despite the
+    apply-a-plugin-to-the-project-that-builds-it circularity.
 - `src/test/java/JavaConventionsPluginTest.java` — uses `ProjectBuilder` + Gradle TestKit to apply the plugin to
   an in-memory project and assert specific plugins/config landed, rather than a full end-to-end build.
 - `src/test/java/CommitAnalyzerExtensionTest.java` — same `ProjectBuilder` approach, specifically for the
@@ -200,34 +203,40 @@ below).
 ./gradlew test --tests JavaConventionsPluginTest   # run the single test class
 ./gradlew check          # verification tasks (currently just test), no publish
 ./gradlew publish        # publish this repo's own jar to GitHub Packages (+ local dir, mavenLocal); depends on check
-./gradlew currentVersion # show axion-release's OWN computation for this repo's own build - unrelated to
-                         # VersionResolver, since this repo doesn't apply duckasteroid-java to itself
+./gradlew currentVersion # show axion-release's OWN computation for this repo's own build - project.version
+                         # itself is still just this raw axion computation (build.gradle: version = scmVersion.version),
+                         # NOT VersionResolver - see the dogfooding note below for why that's still true even
+                         # though duckasteroid-java is now applied here too
 ```
 
 For a *consumer* project applying `duckasteroid-java`, there's no dedicated "show me the version" task — any
 normal task shows it, e.g. `./gradlew properties -q | grep '^version:'`. If `duckasteroid-release-flow` is also
 applied: `./gradlew tagReleaseCandidate` / `./gradlew promoteReleaseCandidate` (both runnable locally, both
-respect `-Prelease.forceVersion`).
+respect `-Prelease.forceVersion`). **Never run `./gradlew properties` (here or anywhere) against a real checkout**
+— it dumps every project property including any GitHub Packages credentials picked up from
+`~/.gradle/gradle.properties` (`gpr.user`/`gpr.key`), printing secrets in cleartext. Use `properties -q | grep`
+against a *specific* known-safe key if you need one value, never the unfiltered dump.
 
 CI (`.github/workflows/build-java.yml`) runs `./gradlew build` on pushes to `feature/**`, `develop`, `release`,
-`main` using Temurin JDK 20. There is no separate lint-only command.
+`main` using Temurin JDK 21 (bumped from 20 once this repo started dogfooding its own Java-21-by-default
+toolchain — see below). There is no separate lint-only command.
 
-**Releases are controlled entirely by git tags.** Pushing a tag matching `v*` triggers
-`.github/workflows/publish.yml`, which creates a GitHub Release from that tag (`gh release create`) and then runs
-`./gradlew publish` in the *same job*. Both steps deliberately run in one workflow/job rather than as two workflows
-chained via the `release: created` event — a workflow run triggered by the default `GITHUB_TOKEN` does not trigger
-other workflows, so a separate release-creation workflow would silently fail to kick off the publish step. Don't
-split this back into two workflows without switching the release-creation step to a PAT. The same constraint is
-why the `examples/workflows/release-candidate.yml` / `promote-release.yml` **templates** (triggered on push to
-`release`/`main`, for consumer projects — see below) are each a single self-contained job rather than relying on
-the tag they push to trigger `publish.yml` — see the `duckasteroid-release-flow.gradle` bullet above.
+**This repo dogfoods its own `duckasteroid-java`/`duckasteroid-release-flow` conventions**, applying both
+(pinned to a specific published version, e.g. `1.0.0-RC4`) in the root `build.gradle`, resolved via
+`settings.gradle`'s `io.github.duckasteroid.github-packages-settings` bootstrap pointing at this repo's own
+GitHub Packages feed — exactly the same mechanism any other consumer uses. This is *not* the same thing as
+applying the in-source precompiled script plugin to the project that builds it, which genuinely is circular
+and impossible (Gradle fails with `Plugin [id: 'duckasteroid-java'] was not found...`); consuming the
+*published* artifact sidesteps that entirely, at the cost of always dogfooding a released version rather than
+whatever's on `HEAD`. `project.version` itself is still the plain `version = scmVersion.version` line in
+`build.gradle` (raw axion-release, unrelated to `VersionResolver`) — this project's toolchain and release-flow
+tasks come from dogfooding, but its own version computation hasn't been switched over.
 
-**Important: this repo does not, and cannot, apply `duckasteroid-java`/`duckasteroid-release-flow` to its own
-build.** A Gradle project can't apply a precompiled script plugin to the same project that builds it — the
-plugin has to be compiled before it can be applied, but compiling it depends on the very build script that
-would be applying it (confirmed empirically: Gradle fails with `Plugin [id: 'duckasteroid-java'] was not
-found... Included Builds (No included builds contain this plugin)`). So this repo's own release process stays
-on plain `axion-release` + `publish.yml` (manually-pushed tag triggers it), unrelated to everything in the
-`duckasteroid-release-flow.gradle` bullet above. The `examples/workflows/*.yml` files show what a *consumer*
-project applying these plugins should put in its own `.github/workflows/` — don't move them back into this
-repo's own `.github/workflows/` expecting them to work here.
+**Releases are controlled entirely by the `develop` → `release` → `main` git flow**, via the live
+`.github/workflows/release-candidate.yml` and `promote-release.yml` (not templates — real workflows for this
+repo; see `examples/workflows/*.yml` for the generic consumer-facing versions of the same two files, which
+differ only in Java toolchain version). Pushing to `release` runs `tagReleaseCandidate` + a pre-release publish;
+pushing to `main` runs `promoteReleaseCandidate` + a final release publish — both tag-then-publish in one
+self-contained job, since a tag pushed with the default `GITHUB_TOKEN` doesn't trigger other workflow runs (a
+separate publish-on-tag workflow would silently never fire). The old `publish.yml` (manually-pushed `v*` tag)
+has been retired now that this flow covers both RC and final releases.
