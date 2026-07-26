@@ -38,6 +38,13 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      # promoteReleaseCandidate creates an annotated tag, which needs a committer identity - the
+      # runner has none configured by default.
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
       # Must run BEFORE promoting: it looks for the last reachable *final* release tag, which the
       # about-to-be-created final tag would otherwise shadow (HEAD would already be sitting on it).
       - name: Generate release notes
