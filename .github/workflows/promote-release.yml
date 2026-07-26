@@ -54,21 +54,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # TEMP WORKAROUND - revert after this release: -Prelease.forceVersion bypasses VersionResolver
-      # (still pinned to the not-yet-fixed duckasteroid-java 1.0.0-RC4, whose exactTagAt bug would
-      # otherwise publish this as "v1.1.0" with a stray prefix). Unlike release-candidate.yml, no
-      # dynamic derivation needed here: promoteReleaseCandidate uses forceVersion as the literal
-      # final tag content (no "-RCn" to append), and axion's own decoration verbatim-returns a forced
-      # version on main/master (no branch-name suffix, confirmed locally before pushing this) - both
-      # steps can just use the same literal "1.1.0". Remove once a corrected plugin version is
-      # published and this repo re-pins to it.
       # Must run BEFORE promoting: it looks for the last reachable *final* release tag, which the
       # about-to-be-created final tag would otherwise shadow (HEAD would already be sitting on it).
       - name: Generate release notes
         run: ./gradlew changelogForRelease
 
       - name: Promote release candidate to final
-        run: ./gradlew promoteReleaseCandidate -Prelease.forceVersion=1.1.0
+        run: ./gradlew promoteReleaseCandidate
 
       - name: Determine tag
         id: tag
@@ -82,4 +74,4 @@ jobs:
       - name: Publish package
         uses: gradle/gradle-build-action@v2
         with:
-          arguments: publish -Prelease.forceVersion=1.1.0
+          arguments: publish
