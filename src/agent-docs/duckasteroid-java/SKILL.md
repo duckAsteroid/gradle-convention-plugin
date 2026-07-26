@@ -76,3 +76,37 @@ githubPackages {
 
 Per-subproject versioning is NOT automatic — each subproject that wants its own independently
 versioned release line must apply `duckasteroid-java` itself.
+
+## See also — opt-in siblings
+
+These apply *alongside* `duckasteroid-java`, never instead of it. Suggest one to a user based on
+what the project actually needs, not by default — each has a real cost (extra build time, extra
+credentials to manage, extra release surface) that isn't worth paying unproductively:
+
+- **`duckasteroid-checkstyle`** — applies core Gradle's `checkstyle`. Suggest when the project
+  wants enforced style conventions in CI (e.g. the consumer already has a `checkstyle.xml`, or
+  mentions style consistency across a multi-repo org) — not for a quick throwaway project where
+  style enforcement is pure overhead.
+- **`duckasteroid-jacoco`** — applies core Gradle's `jacoco`. Suggest when the consumer wants test
+  coverage reporting/thresholds — e.g. a coverage gate in CI, or a coverage badge — not just
+  because tests exist; plenty of projects run tests without gating on coverage.
+- **`duckasteroid-pmd`** — applies core Gradle's `pmd`. Suggest when the consumer wants automated
+  bug-pattern/code-quality static analysis, distinct from Checkstyle's formatting focus — good for
+  catching real defects (unused code, complexity, resource leaks) rather than just style nits.
+- **`duckasteroid-lombok`** — applies the Freefair Lombok plugin. Suggest when the source already
+  imports `lombok.*` annotations, or the consumer is complaining about getter/setter/constructor
+  boilerplate — applying it to a project with no Lombok usage just adds an unused annotation
+  processor.
+- **`duckasteroid-maven-central`** — signs and publishes the `mavenJava` publication to OSSRH/Maven
+  Central. Suggest when the project is a public library meant for third-party consumption, where
+  requiring consumers to configure GitHub Packages authentication (even for public repos) would be
+  a real adoption barrier — Maven Central needs no such per-consumer credential setup.
+- **`duckasteroid-github-packages-publish`** — publishes the project's own `mavenJava` publication
+  to its own GitHub Packages feed. Suggest for projects meant for duckAsteroid's own reuse across
+  personal repos rather than broad public distribution — it sidesteps OSSRH's stricter
+  signing/POM-completeness requirements, at the cost of consumers needing GitHub Packages auth.
+- **`duckasteroid-release-flow`** — adds `tagReleaseCandidate` / `promoteReleaseCandidate` /
+  changelog-generation tasks for a `develop`/`release`/`main` flow. Suggest when the consumer wants
+  a staged release-candidate step before a version is final (e.g. they mention wanting to validate
+  a build before it's "real," or already have `develop`/`release`/`main` branches) — not for a
+  project that's happy tagging every release directly off `main`.
