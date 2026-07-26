@@ -15,10 +15,7 @@ plugins {
     // Published to the Gradle Plugin Portal (unlike the duckasteroid-* plugins above), so no
     // GitHub Packages settings bootstrap is needed for these two to resolve. 3.0.0 is required -
     // 2.1.0 had both plugins registering a project extension named 'agentDocs', which collided
-    // when applied together (duckAsteroid/agent-docs#3); 3.0.0 renames the publish side's
-    // extension to 'agentDocsPublish', but still registers a deprecated 'agentDocs {}' alias for
-    // back-compat that reclaims the name if the publish plugin applies first - so agent-docs
-    // (resolve) must be declared before agent-docs.publish here. Since this project applies
+    // when applied together (duckAsteroid/agent-docs#3). Since this project applies
     // java-gradle-plugin, agent-docs.publish auto-switches to EMBEDDED distribution and requires
     // one docs bundle per declared plugin id under src/agent-docs/<pluginId>/ - see that
     // directory for each duckasteroid-* plugin's agent-facing docs. Applying the resolve plugin
