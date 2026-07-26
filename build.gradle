@@ -12,6 +12,13 @@ plugins {
     // adopt-duckasteroid-gradle-conventions skill / this repo's own README).
     id 'duckasteroid-java' version '1.1.0'
     id 'duckasteroid-release-flow' version '1.1.0'
+    // agent-docs adoption paused: applying both io.github.duckasteroid.agent-docs.publish and
+    // io.github.duckasteroid.agent-docs (resolve) 2.1.0 to the same project fails - they both
+    // register an extension named 'agentDocs', so whichever applies second throws
+    // "Cannot add extension with name 'agentDocs', as there is an extension already registered
+    // with that name." Filed as duckAsteroid/agent-docs#3. src/agent-docs/<pluginId>/SKILL.md
+    // docs are already prepared for each duckasteroid-* plugin id, ready to wire up once that's
+    // fixed upstream.
 }
 
 group = 'io.github.duckasteroid.conventions'
