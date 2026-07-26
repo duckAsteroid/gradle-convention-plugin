@@ -203,10 +203,10 @@ below).
 ./gradlew test --tests JavaConventionsPluginTest   # run the single test class
 ./gradlew check          # verification tasks (currently just test), no publish
 ./gradlew publish        # publish this repo's own jar to GitHub Packages (+ local dir, mavenLocal); depends on check
-./gradlew currentVersion # show axion-release's OWN computation for this repo's own build - project.version
-                         # itself is still just this raw axion computation (build.gradle: version = scmVersion.version),
-                         # NOT VersionResolver - see the dogfooding note below for why that's still true even
-                         # though duckasteroid-java is now applied here too
+./gradlew currentVersion # axion-release's OWN raw computation, always shown regardless of anything else in
+                         # this file - NOT what project.version actually resolves to (that's VersionResolver,
+                         # via duckasteroid-java's afterEvaluate hook, same as any consumer - see dogfooding
+                         # note below). Don't use this task to check project.version; it's a different number.
 ```
 
 For a *consumer* project applying `duckasteroid-java`, there's no dedicated "show me the version" task — any
@@ -228,9 +228,11 @@ GitHub Packages feed — exactly the same mechanism any other consumer uses. Thi
 applying the in-source precompiled script plugin to the project that builds it, which genuinely is circular
 and impossible (Gradle fails with `Plugin [id: 'duckasteroid-java'] was not found...`); consuming the
 *published* artifact sidesteps that entirely, at the cost of always dogfooding a released version rather than
-whatever's on `HEAD`. `project.version` itself is still the plain `version = scmVersion.version` line in
-`build.gradle` (raw axion-release, unrelated to `VersionResolver`) — this project's toolchain and release-flow
-tasks come from dogfooding, but its own version computation hasn't been switched over.
+whatever's on `HEAD`. `project.version` itself **is** computed by `VersionResolver` via `duckasteroid-java`'s
+`afterEvaluate` hook, exactly like any consumer — there used to be a leftover `version = scmVersion.version`
+line here from before this repo applied `duckasteroid-java`, but it was dead code (silently overwritten by the
+plugin's later-firing `afterEvaluate`) and has been removed. Don't use `./gradlew currentVersion` to check this
+— it always shows axion's own raw computation regardless, a different number from `project.version`.
 
 **Releases are controlled entirely by the `develop` → `release` → `main` git flow**, via the live
 `.github/workflows/release-candidate.yml` and `promote-release.yml` (not templates — real workflows for this

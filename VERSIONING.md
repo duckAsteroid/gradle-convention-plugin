@@ -205,10 +205,13 @@ builds contain this plugin)`). Depending on the *published* artifact instead sid
 whatever's on `HEAD`, so a change to `duckasteroid-java.gradle` doesn't affect this repo's own build
 until a new version has actually been published and the pinned version bumped.
 
-`project.version` for this repo's own root project is still computed by the plain
-`version = scmVersion.version` line in `build.gradle` (raw axion-release), not by `VersionResolver` -
-dogfooding covers the Java toolchain and the release-flow tasks, but this project's own version
-computation hasn't been switched over to the commit-analysis scheme it hands out to consumers.
+`project.version` for this repo's own root project **is** computed by `VersionResolver`, via
+`duckasteroid-java`'s `afterEvaluate` hook, the same as any consumer. There used to be a leftover
+`version = scmVersion.version` line in `build.gradle` from before this repo applied `duckasteroid-java`,
+but it was dead code - the plugin's own `afterEvaluate` always fires later and overwrites it - so it's
+been removed. `./gradlew currentVersion` is a red herring here: it's axion-release's own native task and
+always shows axion's raw computation regardless of any of this, a different number from
+`project.version`.
 
 ## Generating release notes
 
