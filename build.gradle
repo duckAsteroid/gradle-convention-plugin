@@ -12,13 +12,21 @@ plugins {
     // adopt-duckasteroid-gradle-conventions skill / this repo's own README).
     id 'duckasteroid-java' version '1.1.0'
     id 'duckasteroid-release-flow' version '1.1.0'
-    // agent-docs adoption paused: applying both io.github.duckasteroid.agent-docs.publish and
-    // io.github.duckasteroid.agent-docs (resolve) 2.1.0 to the same project fails - they both
-    // register an extension named 'agentDocs', so whichever applies second throws
-    // "Cannot add extension with name 'agentDocs', as there is an extension already registered
-    // with that name." Filed as duckAsteroid/agent-docs#3. src/agent-docs/<pluginId>/SKILL.md
-    // docs are already prepared for each duckasteroid-* plugin id, ready to wire up once that's
-    // fixed upstream.
+    // Published to the Gradle Plugin Portal (unlike the duckasteroid-* plugins above), so no
+    // GitHub Packages settings bootstrap is needed for these two to resolve. 3.0.0 is required -
+    // 2.1.0 had both plugins registering a project extension named 'agentDocs', which collided
+    // when applied together (duckAsteroid/agent-docs#3); 3.0.0 renames the publish side's
+    // extension to 'agentDocsPublish', but still registers a deprecated 'agentDocs {}' alias for
+    // back-compat that reclaims the name if the publish plugin applies first - so agent-docs
+    // (resolve) must be declared before agent-docs.publish here. Since this project applies
+    // java-gradle-plugin, agent-docs.publish auto-switches to EMBEDDED distribution and requires
+    // one docs bundle per declared plugin id under src/agent-docs/<pluginId>/ - see that
+    // directory for each duckasteroid-* plugin's agent-facing docs. Applying the resolve plugin
+    // alongside it means running resolveAgentDocs also picks up agent-docs' own embedded
+    // self-documentation (both plugins apply agent-docs.publish to themselves upstream) as local
+    // skills, instead of us having to hand-write usage docs for them.
+    id 'io.github.duckasteroid.agent-docs' version '3.0.0'
+    id 'io.github.duckasteroid.agent-docs.publish' version '3.0.0'
 }
 
 group = 'io.github.duckasteroid.conventions'
