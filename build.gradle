@@ -23,16 +23,39 @@ gradlePlugin {
 // This project IS a Gradle plugin, published via com.gradle.plugin-publish's own auto-generated
 // 'pluginMaven' publication - not a plain Java library. duckasteroid-java's 'mavenJava' publication
 // (from components.java) resolves to the exact same Maven coordinates (group:rootProject.name:version)
-// and would silently overwrite 'pluginMaven' in the same repository if both were published (confirmed
-// via `./gradlew publishToMavenLocal`, which prints exactly this warning). Since 'pluginMaven' is the
-// correct/authoritative one here, drop 'mavenJava' rather than let them race.
-// duckasteroid-java's 'mavenJava' publication isn't actually created until maven-publish's own
-// component-realization phase, which runs its own afterEvaluate-style hook AFTER this script's
-// (and even a plain project.afterEvaluate's) own callbacks - confirmed by instrumenting each phase.
-// gradle.projectsEvaluated runs after all of that has settled, so this is the first point where the
-// removal reliably takes effect.
-gradle.projectsEvaluated {
-    publishing.publications.removeIf { it.name == 'mavenJava' }
+// and would race 'pluginMaven' to publish the same GAV if both ran - fine against mavenLocal/a local
+// directory repo (silently overwrites, just a warning), but a hard 409 Conflict against GitHub
+// Packages, which won't let a second publish overwrite a version that already landed (confirmed by
+// a real CI run). Since 'pluginMaven' is the correct/authoritative one here, skip 'mavenJava'
+// entirely rather than let them race.
+//
+// NOTE: removing the publication from publishing.publications (e.g. via
+// `gradle.projectsEvaluated { publishing.publications.removeIf { ... } }`) does NOT work - the
+// maven-publish plugin registers a publish task for each publication eagerly, as soon as it's added
+// to the container, which happens well before gradle.projectsEvaluated fires. Removing the
+// publication afterwards doesn't un-register the task that was already created for it (confirmed by
+// a real CI run: the mavenJava tasks still executed and published successfully, then pluginMaven's
+// publish of the same GAV failed with 409). Skipping the tasks themselves via onlyIf works regardless
+// of when they were registered.
+//
+// Three config-cache-incompatible attempts already ruled out here (all confirmed by real CI/local
+// runs): (1) implicit delegate resolution (`onlyIf { publication.name != ... }`) throws a
+// MissingPropertyException on cache replay; (2) capturing the outer configureEach task as a named
+// variable and referencing it from the onlyIf closure fails with "value discarded during
+// serialization"; (3) even reading `.publication` on the task's OWN onlyIf parameter (no outer
+// capture at all) still fails the same way - task.publication itself isn't config-cache-serializable
+// for these particular gradle-plugin-marker publish tasks specifically (ordinary user-defined
+// publications may differ). Matching on the task NAME instead - a plain String, trivially
+// serializable - sidesteps all of that.
+tasks.withType(PublishToMavenRepository).configureEach {
+    onlyIf("skip the mavenJava publication - pluginMaven is authoritative here") { t ->
+        !t.name.startsWith('publishMavenJavaPublicationTo')
+    }
+}
+tasks.withType(PublishToMavenLocal).configureEach {
+    onlyIf("skip the mavenJava publication - pluginMaven is authoritative here") { t ->
+        !t.name.startsWith('publishMavenJavaPublicationTo')
+    }
 }
 
 repositories {
