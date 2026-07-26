@@ -57,24 +57,38 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      # TEMP WORKAROUND - revert after this release: -Prelease.forceVersion bypasses VersionResolver
+      # (still pinned to the not-yet-fixed duckasteroid-java 1.0.0-RC4, whose exactTagAt bug would
+      # otherwise publish this as "v1.1.0-RC1" with a stray prefix) and falls back to axion's own
+      # native, correctly-stripped version instead. tagReleaseCandidate's forceVersion is the bare
+      # candidate (it appends "-RCn" itself); the actual chosen RC number isn't known until after
+      # tagging, so "Determine tag" below also derives the exact publish version (tag minus the "v"
+      # prefix) rather than hardcoding it - otherwise project.version at publish time would be the
+      # bare "1.1.0" (no RC suffix), permanently colliding with the real final 1.1.0 later. Remove
+      # both -Prelease.forceVersion uses and the "version" output once a corrected plugin version is
+      # published and this repo re-pins to it.
       # Must run BEFORE tagging: it looks for the *previous* RC tag reachable from HEAD, which the
       # about-to-be-created tag would otherwise shadow.
       - name: Generate release-candidate notes
         run: ./gradlew changelogForReleaseCandidate
 
       - name: Tag next release candidate
-        run: ./gradlew tagReleaseCandidate
+        run: ./gradlew tagReleaseCandidate -Prelease.forceVersion=1.1.0
 
       - name: Determine tag
         id: tag
-        run: echo "name=$(git describe --tags --exact-match HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          name="$(git describe --tags --exact-match HEAD)"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "version=${name#v}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "${{ steps.tag.outputs.name }}" --notes-file build/changelog.md --prerelease
 
+      # TEMP WORKAROUND - see note above tagReleaseCandidate; remove -Prelease.forceVersion once fixed.
       - name: Publish package
         uses: gradle/gradle-build-action@v2
         with:
-          arguments: publish
+          arguments: publish -Prelease.forceVersion=${{ steps.tag.outputs.version }}
