@@ -8,12 +8,16 @@
 # after upgrading the plugin to pick up template changes; if you've edited this file locally and
 # want to discard those edits in favor of the new template, add -Pduckasteroid.workflows.force=true.
 
-# Promotes an accepted release candidate to a final release on every push to `main`:
-# promoteReleaseCandidate strips the -RCn suffix off the nearest reachable RC tag (or picks up
-# release.forceVersion if set), mints the final tag, and this job then cuts the GitHub Release and
-# publishes it - all in the same job, for the same reason release-candidate.yml is self-contained
-# (a tag pushed with the default GITHUB_TOKEN doesn't trigger other workflow runs).
-name: Promote release candidate to final release
+# Promotes every project's accepted release candidate to a final release on every push to `main`:
+# promoteReleaseCandidates loops every project in the build that applies duckasteroid-release-flow,
+# strips the -RCn suffix off each one's nearest reachable RC tag (generating that project's own
+# final-release changelog first), skips projects with no RC pending, and writes
+# build/release-manifest.json - one {module, tag, changelog} entry per project actually promoted.
+# This job then turns each manifest entry into its own GitHub Release, all in the same job, for the
+# same reason release-candidate.yml is self-contained (a tag pushed with the default GITHUB_TOKEN
+# doesn't trigger other workflow runs). Works the same whether the repo releases as a single module
+# or several independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
+name: Promote release candidates to final releases
 on:
   push:
     branches:
@@ -22,45 +26,45 @@ jobs:
   promote:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # needed to create the tag/GitHub Release
+      contents: write # needed to create the tag(s)/GitHub Release(s)
       packages: write # needed to publish to GitHub Packages
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full tag + commit history needed to find the RC tag to promote
+          fetch-depth: 0 # full tag + commit history needed to find the RC tag(s) to promote
+
       - uses: actions/setup-java@v4
         with:
           java-version: '@@JAVA_VERSION@@'
           distribution: 'temurin'
+
       - name: Validate Gradle wrapper
         uses: gradle/wrapper-validation-action@v1
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # promoteReleaseCandidate creates an annotated tag, which needs a committer identity - the
+      # promoteReleaseCandidates creates annotated tags, which need a committer identity - the
       # runner has none configured by default.
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # Must run BEFORE promoting: it looks for the last reachable *final* release tag, which the
-      # about-to-be-created final tag would otherwise shadow (HEAD would already be sitting on it).
-      - name: Generate release notes
-        run: ./gradlew changelogForRelease
+      - name: Promote release candidates to final
+        run: ./gradlew promoteReleaseCandidates
 
-      - name: Promote release candidate to final
-        run: ./gradlew promoteReleaseCandidate
-
-      - name: Determine tag
-        id: tag
-        run: echo "name=$(git describe --tags --exact-match HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
+      # One GitHub Release per build/release-manifest.json entry. An empty manifest (no project had
+      # a pending RC to promote) means the loop below simply does nothing - not an error.
+      - name: Create GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ steps.tag.outputs.name }}" --notes-file build/changelog.md
+        run: |
+          jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
+            tag=$(jq -r '.tag' <<< "$entry")
+            changelog=$(jq -r '.changelog' <<< "$entry")
+            gh release create "$tag" --notes-file "$changelog"
+          done
 
       - name: Publish package
         uses: gradle/gradle-build-action@v2

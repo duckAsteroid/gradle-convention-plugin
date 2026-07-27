@@ -156,8 +156,10 @@ enumerates whatever *did* apply the plugin - just `:api` in that case.
 even when `duckasteroid-release-flow` is applied to several subprojects - there is exactly one
 `.github/workflows/release-candidate.yml` / `promote-release.yml` pair per repository, generated once,
 regardless of how many modules within it are independently releasable. The Java toolchain
-substitution they perform picks up the root project's own toolchain; if applying projects use a
-different Java version than root, the installed workflow's `setup-java` step needs to provision
-whichever versions are actually in use across all applying projects (multiple versions in one
-`actions/setup-java` step), since a single CI job now has to be able to build every releasable module,
-not just root.
+substitution they perform picks up the toolchain of whichever applying project's script wins the
+registration guard first (normally root, if root applies `duckasteroid-java`); if applying projects
+use a different Java version than that one, the installed workflow's `setup-java` step needs to
+provision whichever versions are actually in use across all applying projects (multiple versions in
+one `actions/setup-java` step), since a single CI job now has to be able to build every releasable
+module, not just the one whose toolchain got picked up. Not yet designed - a spike, same as the
+"Known limitation" above.
