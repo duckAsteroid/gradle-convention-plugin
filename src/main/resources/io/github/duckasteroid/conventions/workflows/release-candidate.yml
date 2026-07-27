@@ -1,16 +1,12 @@
-# GENERIC TEMPLATE for other consumer projects - not the copy this repo itself runs. This repo
-# dogfoods these same conventions by depending on duckasteroid-java/duckasteroid-release-flow as a
-# *published* GitHub Packages artifact (see build.gradle/settings.gradle) rather than the in-source
-# precompiled script plugin (which really can't apply to the project that builds it - circular).
-# Its own live copy of this workflow is .github/workflows/release-candidate.yml, with one
-# repo-specific difference: the Java toolchain version. This file shows what any *consumer* project
-# applying duckasteroid-release-flow should put in its own .github/workflows/ to get the
-# develop -> release -> main flow described in VERSIONING.md.
-#
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
+#
+# Installed by the duckasteroid-release-flow Gradle plugin's installReleaseWorkflows task
+# (https://github.com/duckAsteroid/gradle-convention-plugin). Re-run installReleaseWorkflows
+# after upgrading the plugin to pick up template changes; if you've edited this file locally and
+# want to discard those edits in favor of the new template, add -Pduckasteroid.workflows.force=true.
 
 # Auto-bumps the release-candidate number on every push to `release`: tagReleaseCandidate derives
 # the candidate version from conventional commits since the last final release (or picks up
@@ -37,7 +33,7 @@ jobs:
           fetch-depth: 0 # full tag + commit history needed to derive the version
       - uses: actions/setup-java@v4
         with:
-          java-version: '20'
+          java-version: '@@JAVA_VERSION@@'
           distribution: 'temurin'
       - name: Validate Gradle wrapper
         uses: gradle/wrapper-validation-action@v1
