@@ -11,9 +11,9 @@
 #
 # This repo dogfoods its own duckasteroid-java/duckasteroid-release-flow conventions (see
 # build.gradle/settings.gradle) by depending on them as a *published* GitHub Packages artifact,
-# same as any other consumer. This workflow is the live counterpart of
-# examples/workflows/promote-release.yml, which remains as a generic reference for other consumer
-# projects wiring up the same flow.
+# same as any other consumer. This workflow doubles as a human-readable reference for what
+# `./gradlew installReleaseWorkflows` installs into a consumer project's own .github/workflows/
+# (identical apart from the pinned Java 21 toolchain below).
 name: Promote release candidate to final release
 on:
   push:

@@ -81,7 +81,15 @@ These are not applied by `duckasteroid-java` — apply them alongside it if you 
     for feeding into `gh release create --notes-file`. Each must run *before* its tagging/promoting counterpart in
     the same job. `changelogForReleaseCandidate`'s scope (whole cycle so far, or just the delta since the previous
     RC) is configurable via `changelog { rcScope = ... }` — see [VERSIONING.md](VERSIONING.md) for details.
-  * All four are plain Gradle tasks, runnable locally as well as from CI — release engineering doesn't hard-depend
-    on GitHub Actions being available. See `examples/workflows/` for the full CI wiring — these are templates for
-    a *consumer* project's own workflows, since this repo can't apply its own plugins to itself (see
-    [VERSIONING.md](VERSIONING.md)).
+  * `installReleaseWorkflows` — installs the `release-candidate.yml`/`promote-release.yml` GitHub Actions workflows
+    (bundled with the plugin, templated with your project's Java toolchain version) into `.github/workflows/`.
+    Stamps each installed file with a `# duckasteroid-workflow-version: X sha256:Y` marker comment and never
+    overwrites a file it doesn't recognize as its own or one you've edited since install (skip + warn either way) —
+    pass `-Pduckasteroid.workflows.force=true` to discard local edits and take the new version anyway.
+  * `checkReleaseWorkflows` — read-only: warns (never fails) if an installed workflow is missing, unmarked, edited
+    since install, or older than the currently applied plugin version. Not wired into `build`/`check`; run it
+    explicitly.
+  * All six are plain Gradle tasks, runnable locally as well as from CI — release engineering doesn't hard-depend
+    on GitHub Actions being available. This repo's own `.github/workflows/release-candidate.yml` /
+    `promote-release.yml` are a readable, human-facing reference for what `installReleaseWorkflows` installs
+    (identical apart from the pinned Java 21 toolchain — see [VERSIONING.md](VERSIONING.md)).

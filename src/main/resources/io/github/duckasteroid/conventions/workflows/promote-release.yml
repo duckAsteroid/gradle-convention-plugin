@@ -1,12 +1,12 @@
-# GENERIC TEMPLATE for other consumer projects - not the copy this repo itself runs; see the
-# matching note in release-candidate.yml in this same directory for why. This repo's own live copy
-# is .github/workflows/promote-release.yml. This shows what any *consumer* project applying
-# duckasteroid-release-flow should put in its own .github/workflows/.
-#
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
+#
+# Installed by the duckasteroid-release-flow Gradle plugin's installReleaseWorkflows task
+# (https://github.com/duckAsteroid/gradle-convention-plugin). Re-run installReleaseWorkflows
+# after upgrading the plugin to pick up template changes; if you've edited this file locally and
+# want to discard those edits in favor of the new template, add -Pduckasteroid.workflows.force=true.
 
 # Promotes an accepted release candidate to a final release on every push to `main`:
 # promoteReleaseCandidate strips the -RCn suffix off the nearest reachable RC tag (or picks up
@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0 # full tag + commit history needed to find the RC tag to promote
       - uses: actions/setup-java@v4
         with:
-          java-version: '20'
+          java-version: '@@JAVA_VERSION@@'
           distribution: 'temurin'
       - name: Validate Gradle wrapper
         uses: gradle/wrapper-validation-action@v1

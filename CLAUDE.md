@@ -129,8 +129,8 @@ The convention plugins are split so consumers can opt into only what they want, 
   `-publish` to describe what it does, since the hardcoded variant wasn't needed.)
 - `duckasteroid-release-flow.gradle` — opt-in release-engineering plugin for a
   `develop`/`release` → `main` git flow: `release` accumulates release-candidate builds before an accepted RC
-  is promoted to a final release on `main`. Four tasks, all reusing `VersionResolver`, the tagging two also
-  respecting the `release.forceVersion` backstop, all plain Gradle tasks runnable locally as well as from CI:
+  is promoted to a final release on `main`. Six tasks, all plain Gradle tasks runnable locally as well as from
+  CI:
   - `tagReleaseCandidate` — tags/pushes the next `X.Y.Z-RCn` (auto-incrementing `n`); intended to run on every
     push to `release`.
   - `promoteReleaseCandidate` — strips the `-RCn` suffix off the nearest reachable RC tag and tags/pushes the
@@ -146,10 +146,44 @@ The convention plugins are split so consumers can opt into only what they want, 
     cycle so far) or `SINCE_PREVIOUS_RC` (just the delta, falling back to `SINCE_LAST_RELEASE` automatically
     when there's no previous RC yet)). `changelogForRelease` always uses `SINCE_LAST_RELEASE` — the final
     release's notes should be the complete picture regardless of that setting.
-  - `examples/workflows/release-candidate.yml` and `promote-release.yml` are **generic templates** for other
-    consumer projects. This repo also runs live copies of the same two workflows in its own
-    `.github/workflows/` — see the important note below about how that's possible despite the
-    apply-a-plugin-to-the-project-that-builds-it circularity.
+  - This repo's own `.github/workflows/release-candidate.yml` and `promote-release.yml` are live workflows —
+    see the important note below about how that's possible despite the apply-a-plugin-to-the-project-that-
+    builds-it circularity — and also a human-readable reference for what `installReleaseWorkflows` installs
+    into a consumer project (see below).
+  - `installReleaseWorkflows` / `checkReleaseWorkflows` (issue #2) — install a consumer's `.github/workflows/`
+    copy of the two workflows above, with staleness detection so a consumer can tell whether their copy still
+    matches what the currently-applied plugin version would install.
+    - The workflow bodies are bundled as plugin resources, `src/main/resources/io/github/duckasteroid/conventions/workflows/{release-candidate.yml,promote-release.yml}` — near-identical to this repo's own
+      `.github/workflows/*.yml` above, minus the repo-specific dogfooding commentary (irrelevant once installed
+      into a real consumer repo), with the one variable bit (Java toolchain version) as a plain `@@JAVA_VERSION@@`
+      placeholder substituted via `String.replace` at install time — deliberately **not** Gradle's
+      `expand()`/GString syntax, since the workflow YAML itself contains live `${{ github.token }}`-style GitHub
+      Actions expressions that must survive byte-for-byte.
+    - A third bundled resource, `workflow-version.txt`, holds just `${version}`, expanded by `processResources`
+      (root `build.gradle`) to the actual value of `project.version` — this repo's own published version — so
+      both tasks know "the currently applied plugin version" at runtime without hardcoding it. That `expand()`
+      call is deferred into `project.afterEvaluate { }` in `build.gradle` (capturing the resolved version into a
+      plain local `String` before wiring it into `filesMatching { }`) for two stacked reasons: `project.version`
+      isn't actually resolved until `duckasteroid-java`'s own `afterEvaluate` hook runs, and reading
+      `project.version` from directly inside a `filesMatching { }` action — which normally executes at task
+      *execution* time — hits the same `Task.project`-under-the-configuration-cache restriction described for
+      `ConfigCacheSafeSystemReader` above.
+    - Each installed file's first line is a `# duckasteroid-workflow-version: X sha256:Y` marker comment, where
+      `Y` hashes everything *below* that line (the templated body) — computed at install time, since it depends
+      on the per-consumer Java version substitution. This is a self-attestation, not a tamper-proof checksum (the
+      hash lives in the file it verifies), which is an accepted tradeoff: it only needs to catch the realistic
+      accident (editing a step without touching a comment three lines above it), not someone deliberately
+      recomputing a matching hash — see the issue for the full rationale against adding an external manifest.
+    - `WorkflowMarker.groovy` (render/parse/hash the marker line), `WorkflowInstaller.groovy` (the
+      install-time skip/overwrite decision: no file → install; file present with no marker → foreign, skip; marker
+      present and hash matches → untouched since install, overwrite; hash mismatch → edited since install, skip
+      unless `-Pduckasteroid.workflows.force=true`), and `WorkflowChecker.groovy` (the read-only counterpart:
+      classifies an installed file as missing/not-ours/tampered/stale/up-to-date) are plain Groovy classes with no
+      Gradle dependency, mirroring the `VersionResolver`/`CommitAnalyzer` split — independently unit-tested via
+      real temp-directory files rather than mocking I/O.
+    - `checkReleaseWorkflows` only warns (stderr), consistent with the non-conforming-commit-message precedent in
+      `VersionResolver` — never fails the build — and is deliberately **not** wired into `build`/`check`, so it
+      adds no noise to an ordinary CI run; it's meant to be run explicitly.
 - `src/test/java/JavaConventionsPluginTest.java` — uses `ProjectBuilder` + Gradle TestKit to apply the plugin to
   an in-memory project and assert specific plugins/config landed, rather than a full end-to-end build.
 - `src/test/java/CommitAnalyzerExtensionTest.java` — same `ProjectBuilder` approach, specifically for the
@@ -160,6 +194,14 @@ The convention plugins are split so consumers can opt into only what they want, 
   scope (`**scope:**`) formatting, no-bump commits omitted, non-conforming commits still listed under Bug
   Fixes with their raw first line, and custom `typeRules` (including a custom `majorTypes` entry grouping
   under Breaking Changes without a `!` marker) threaded through correctly.
+- `src/test/java/WorkflowMarkerTest.java`, `WorkflowInstallerTest.java`, `WorkflowCheckerTest.java` — plain
+  JUnit, no Gradle/git involved (real temp-directory files, not mocked I/O): marker render/parse round-trip,
+  the install-time skip/overwrite decision matrix (no file/foreign file/untouched/edited, with and without
+  force), and the read-only check status classification (missing/not-ours/tampered/stale/up-to-date).
+- `src/test/java/ReleaseFlowPluginTest.java` — `ProjectBuilder` approach like `JavaConventionsPluginTest`:
+  applies `duckasteroid-java` + `duckasteroid-release-flow` and asserts all six tasks are registered in the
+  `release` group. Doesn't exercise task *actions* (`ProjectBuilder` doesn't run `doLast` blocks) — that's
+  what the three test classes above are for.
 - `build.gradle` (root) — builds the plugin JAR itself: applies `groovy-gradle-plugin`, `com.gradle.plugin-publish`,
   `com.github.ben-manes.versions`, and `axion-release` for its own versioning. Targets Java 21 for the plugin
   project itself — separate from the toolchain version `duckasteroid-java.gradle` configures for consumers.
@@ -235,9 +277,10 @@ plugin's later-firing `afterEvaluate`) and has been removed. Don't use `./gradle
 — it always shows axion's own raw computation regardless, a different number from `project.version`.
 
 **Releases are controlled entirely by the `develop` → `release` → `main` git flow**, via the live
-`.github/workflows/release-candidate.yml` and `promote-release.yml` (not templates — real workflows for this
-repo; see `examples/workflows/*.yml` for the generic consumer-facing versions of the same two files, which
-differ only in Java toolchain version). Pushing to `release` runs `tagReleaseCandidate` + a pre-release publish;
+`.github/workflows/release-candidate.yml` and `promote-release.yml` (real workflows for this repo, and also
+the human-readable reference for what `installReleaseWorkflows` installs into a consumer project — see
+"Installing the release workflows" in VERSIONING.md — differing only in Java toolchain version). Pushing to
+`release` runs `tagReleaseCandidate` + a pre-release publish;
 pushing to `main` runs `promoteReleaseCandidate` + a final release publish — both tag-then-publish in one
 self-contained job, since a tag pushed with the default `GITHUB_TOKEN` doesn't trigger other workflow runs (a
 separate publish-on-tag workflow would silently never fire). The old `publish.yml` (manually-pushed `v*` tag)
