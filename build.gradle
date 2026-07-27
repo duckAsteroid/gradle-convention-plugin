@@ -118,6 +118,29 @@ test {
     useJUnitPlatform();
 }
 
+// Stamps the actual published plugin version into the bundled workflow-version.txt resource, read
+// at runtime by installReleaseWorkflows/checkReleaseWorkflows (duckasteroid-release-flow.gradle) to
+// know which version's marker to write/compare against. Scoped to this one resource via
+// filesMatching, deliberately NOT a blanket expand() on all resources - the release-candidate.yml /
+// promote-release.yml templates alongside it contain live '${{ github.token }}'-style GitHub
+// Actions expressions that must pass through byte-for-byte, not be treated as Groovy GStrings.
+//
+// project.version isn't resolved to its real value until duckasteroid-java's afterEvaluate hook
+// runs (see that plugin's own version-resolution comment), so it can't be read eagerly here at
+// script-evaluation time - deferred to project.afterEvaluate, same as that hook. The resolved
+// String is captured into a local val and handed to expand() as a plain value, rather than reading
+// project.version from inside the filesMatching action itself: filesMatching's action normally runs
+// at task *execution* time, and Task.project access there is unsupported under the configuration
+// cache.
+project.afterEvaluate {
+    def resolvedVersion = project.version.toString()
+    tasks.named('processResources') {
+        filesMatching('io/github/duckasteroid/conventions/workflows/workflow-version.txt') {
+            expand(version: resolvedVersion)
+        }
+    }
+}
+
 tasks.named('publish') {
     dependsOn('check')
 }

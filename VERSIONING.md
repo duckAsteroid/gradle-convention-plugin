@@ -171,17 +171,30 @@ computed candidate version into an actual, pushed git tag, plus matching release
   tagging/promoting counterpart in the same job, since they look for the *previous* RC tag / the
   last *final* tag reachable from HEAD, which the about-to-be-created new tag would otherwise shadow.
 
-All four are plain Gradle tasks (`./gradlew tagReleaseCandidate`, etc.), runnable locally as well as
+Six tasks total - the four above, plus `installReleaseWorkflows`/`checkReleaseWorkflows` (install and
+verify the two GitHub Actions workflows that invoke them; see "Installing the release workflows"
+below). All are plain Gradle tasks (`./gradlew tagReleaseCandidate`, etc.), runnable locally as well as
 from CI - release engineering doesn't hard-depend on GitHub Actions being available.
 [`.github/workflows/release-candidate.yml`](.github/workflows/release-candidate.yml) and
-[`promote-release.yml`](.github/workflows/promote-release.yml) are this repo's own **live** workflows;
-[`examples/workflows/release-candidate.yml`](examples/workflows/release-candidate.yml) and
-[`promote-release.yml`](examples/workflows/promote-release.yml) are the **generic templates** for a
-consumer project's own `.github/workflows/` (identical apart from the Java toolchain version - see
+[`promote-release.yml`](.github/workflows/promote-release.yml) are this repo's own **live** workflows,
+and also a readable, human-facing reference for what `installReleaseWorkflows` installs into a
+*consumer* project's own `.github/workflows/` (identical apart from the Java toolchain version - see
 "Dogfooding this repo's own plugin" below). Each is a single, self-contained job (changelog, tag, cut
 the GitHub Release with `--notes-file`, `gradlew publish`) rather than relying on the pushed tag to
 trigger a separate workflow, because a tag pushed with the default `GITHUB_TOKEN` doesn't trigger
 other workflow runs.
+
+## Installing the release workflows
+
+`./gradlew installReleaseWorkflows` copies the bundled `release-candidate.yml`/`promote-release.yml`
+templates into `.github/workflows/`, substituting the consuming project's own Java toolchain version.
+Each installed file starts with a `# duckasteroid-workflow-version: X sha256:Y` marker comment - `Y`
+hashes everything below that line, so a later `installReleaseWorkflows` run can tell an untouched
+install (safe to overwrite with the new template) from one you've hand-edited since (skipped, with a
+warning pointing at `-Pduckasteroid.workflows.force=true` to overwrite anyway). `./gradlew
+checkReleaseWorkflows` is the read-only counterpart - warns (never fails the build) if an installed
+file is missing, unmarked, edited since install, or older than the currently applied plugin version;
+it's not wired into `build`/`check`, so run it explicitly.
 
 There's no separate manual-tag-triggered publish workflow any more - the old `publish.yml` (triggered
 on any `v*` tag pushed directly) was retired once `release-candidate.yml`/`promote-release.yml` came

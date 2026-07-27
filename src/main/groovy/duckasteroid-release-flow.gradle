@@ -1,21 +1,25 @@
+import org.gradle.api.plugins.JavaPluginExtension
 import io.github.duckasteroid.conventions.ChangelogExtension
 import io.github.duckasteroid.conventions.ChangelogGenerator
 import io.github.duckasteroid.conventions.ChangelogScope
 import io.github.duckasteroid.conventions.CommitAnalyzerExtension
 import io.github.duckasteroid.conventions.VersionResolver
+import io.github.duckasteroid.conventions.WorkflowChecker
+import io.github.duckasteroid.conventions.WorkflowInstaller
 
 // Opt-in release-engineering tasks for the develop -> release -> main flow described in
 // VERSIONING.md at the repo root. Apply alongside duckasteroid-java, which computes
 // project.ext.tagPrefix / project.ext.modulePath that these tasks reuse rather than recomputing.
 //
-// Four tasks total - tagReleaseCandidate/promoteReleaseCandidate are the release-time counterpart to
+// Six tasks total - tagReleaseCandidate/promoteReleaseCandidate are the release-time counterpart to
 // duckasteroid-java's ordinary-build version resolution (they don't just *compute* a version, they
 // actually create and push a tag for it); changelogForReleaseCandidate/changelogForRelease generate
-// the matching release notes (see below). All four are plain Gradle tasks, runnable locally as well
-// as from CI (see examples/workflows/release-candidate.yml / promote-release.yml - templates for a
-// *consumer* project's own workflows, NOT live workflows in the gradle-convention-plugin repo itself,
-// which can't apply its own plugins to itself - see VERSIONING.md) - release engineering shouldn't
-// hard-depend on GitHub Actions being up.
+// the matching release notes (see below); installReleaseWorkflows/checkReleaseWorkflows (see issue
+// #2, further down) install/verify the GitHub Actions workflow files that invoke all four of the
+// above. All six are plain Gradle tasks, runnable locally as well as from CI - release engineering
+// shouldn't hard-depend on GitHub Actions being up. This repo's own .github/workflows/*.yml are a
+// human-readable reference for what installReleaseWorkflows installs (see VERSIONING.md) - this
+// repo can't apply its own plugins to itself, so they're not literally produced by that task here.
 //
 // tagReleaseCandidate/promoteReleaseCandidate respect release.forceVersion as the ultimate backstop,
 // same as the ordinary build version resolution in duckasteroid-java: if set, it's used verbatim, no
@@ -117,6 +121,107 @@ tasks.register('changelogForRelease') {
                 repoDir, tagPrefix, modulePath, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
         writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
     }
+}
+
+// installReleaseWorkflows / checkReleaseWorkflows (see issue #2): install/verify a consumer's
+// release-candidate.yml/promote-release.yml GitHub Actions workflows, with staleness detection so
+// a consumer can tell whether their installed copy still matches what this plugin version would
+// install. Both bundle the same release-candidate.yml/promote-release.yml as plugin resources
+// (src/main/resources/io/github/duckasteroid/conventions/workflows/), templating the one variable
+// bit (the Java toolchain version) at install time via a plain '@@JAVA_VERSION@@' placeholder -
+// deliberately NOT Gradle's expand()/GString syntax, since the workflow YAML itself contains live
+// '${{ github.token }}'-style GitHub Actions expressions that must survive untouched.
+//
+// WorkflowInstaller/WorkflowChecker (plain Groovy classes, no Gradle dependency, unit-tested
+// directly) do the actual marker/hash comparison - see WorkflowMarker's doc comment for the
+// skip/overwrite rules. Resource bytes and the toolchain version are read at configuration time
+// (loadWorkflowResource() below, plus java.toolchain) and captured as plain local values, same
+// config-cache-safe pattern as the rest of this file: doLast blocks below never touch `project`.
+tasks.register('installReleaseWorkflows') {
+    group = 'release'
+    description = 'Installs the release-candidate/promote-release GitHub Actions workflows bundled with ' +
+            'this plugin into .github/workflows/, without clobbering files edited since a previous install ' +
+            '(use -Pduckasteroid.workflows.force=true to override).'
+    def workflowsDir = new File(rootProject.projectDir, '.github/workflows')
+    def javaVersion = project.extensions.getByType(JavaPluginExtension).toolchain.languageVersion.get().toString()
+    def force = project.hasProperty('duckasteroid.workflows.force')
+    def pluginVersion = loadWorkflowResource('workflow-version.txt').trim()
+    def templates = [
+            'release-candidate.yml': loadWorkflowResource('release-candidate.yml'),
+            'promote-release.yml'  : loadWorkflowResource('promote-release.yml'),
+    ]
+    doLast {
+        templates.each { fileName, template ->
+            String body = template.replace('@@JAVA_VERSION@@', javaVersion)
+            File target = new File(workflowsDir, fileName)
+            WorkflowInstaller.Result result = WorkflowInstaller.install(target, pluginVersion, body, force)
+            switch (result) {
+                case WorkflowInstaller.Result.INSTALLED:
+                case WorkflowInstaller.Result.OVERWRITTEN:
+                case WorkflowInstaller.Result.FORCED:
+                    println "installReleaseWorkflows: wrote ${target} (${result})"
+                    break
+                case WorkflowInstaller.Result.UP_TO_DATE:
+                    println "installReleaseWorkflows: ${target} already up to date"
+                    break
+                case WorkflowInstaller.Result.SKIPPED_FOREIGN:
+                    logger.warn("installReleaseWorkflows: skipped ${target} - no duckasteroid marker found " +
+                            "(foreign or hand-written file); not overwriting it.")
+                    break
+                case WorkflowInstaller.Result.SKIPPED_MODIFIED:
+                    logger.warn("installReleaseWorkflows: skipped ${target} - edited since install (its body " +
+                            "no longer matches its marker hash); not overwriting it. Re-run with " +
+                            "-Pduckasteroid.workflows.force=true to discard those edits and take the new version.")
+                    break
+            }
+        }
+    }
+}
+
+tasks.register('checkReleaseWorkflows') {
+    group = 'release'
+    description = 'Warns (never fails) if the installed release workflows are missing, unmarked, edited ' +
+            'since install, or older than the currently applied duckasteroid-release-flow version. Not ' +
+            'wired into build/check, so it never adds noise to an ordinary CI run.'
+    def workflowsDir = new File(rootProject.projectDir, '.github/workflows')
+    def pluginVersion = loadWorkflowResource('workflow-version.txt').trim()
+    def fileNames = ['release-candidate.yml', 'promote-release.yml']
+    doLast {
+        fileNames.each { fileName ->
+            File target = new File(workflowsDir, fileName)
+            WorkflowChecker.CheckResult result = WorkflowChecker.check(target, pluginVersion)
+            switch (result.status) {
+                case WorkflowChecker.Status.UP_TO_DATE:
+                    println "checkReleaseWorkflows: ${target} is up to date (${pluginVersion})"
+                    break
+                case WorkflowChecker.Status.MISSING:
+                    logger.warn("checkReleaseWorkflows: ${target} does not exist - run installReleaseWorkflows to install it.")
+                    break
+                case WorkflowChecker.Status.NOT_OURS:
+                    logger.warn("checkReleaseWorkflows: ${target} has no duckasteroid marker - it wasn't installed by installReleaseWorkflows.")
+                    break
+                case WorkflowChecker.Status.TAMPERED:
+                    logger.warn("checkReleaseWorkflows: ${target} has been edited since install (its body no " +
+                            "longer matches its marker hash from version ${result.installedVersion}).")
+                    break
+                case WorkflowChecker.Status.STALE:
+                    logger.warn("checkReleaseWorkflows: ${target} was installed from duckasteroid-release-flow " +
+                            "${result.installedVersion}, but ${pluginVersion} is currently applied - run " +
+                            "installReleaseWorkflows to update it.")
+                    break
+            }
+        }
+    }
+}
+
+/** Reads a bundled workflow resource (see src/main/resources/.../conventions/workflows/) as text. */
+static String loadWorkflowResource(String fileName) {
+    String path = "io/github/duckasteroid/conventions/workflows/${fileName}"
+    InputStream stream = WorkflowInstaller.classLoader.getResourceAsStream(path)
+    if (stream == null) {
+        throw new IllegalStateException("Missing bundled resource: ${path}")
+    }
+    stream.withStream { it.getText('UTF-8') }
 }
 
 /** Writes generated changelog Markdown to outputFile, creating parent directories as needed. */

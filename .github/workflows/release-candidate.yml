@@ -11,9 +11,9 @@
 # This repo dogfoods its own duckasteroid-java/duckasteroid-release-flow conventions (see
 # build.gradle/settings.gradle) by depending on them as a *published* GitHub Packages artifact,
 # same as any other consumer - not by applying the in-source precompiled script plugin to itself
-# (which really is circular/impossible; see CLAUDE.md). This workflow is the live counterpart of
-# examples/workflows/release-candidate.yml, which remains as a generic reference for other
-# consumer projects wiring up the same flow.
+# (which really is circular/impossible; see CLAUDE.md). This workflow doubles as a human-readable
+# reference for what `./gradlew installReleaseWorkflows` installs into a consumer project's own
+# .github/workflows/ (identical apart from the pinned Java 21 toolchain below).
 #
 # Deliberately self-contained rather than relying on the tag push to trigger a separate publish
 # workflow: a tag pushed with the default GITHUB_TOKEN does not trigger other workflow runs.
