@@ -3,6 +3,7 @@ import org.gradle.api.publish.maven.MavenPublication
 import org.eclipse.jgit.lib.RepositoryBuilder
 import io.github.duckasteroid.conventions.CommitAnalyzer
 import io.github.duckasteroid.conventions.CommitAnalyzerExtension
+import io.github.duckasteroid.conventions.ConfigCacheSafeSystemReader
 import io.github.duckasteroid.conventions.VersionResolver
 
 plugins {
@@ -60,6 +61,10 @@ def ghOwner = 'duckAsteroid'
 def ghRepo = rootProject.name
 def ghBranch = 'main'
 try {
+    // Must run before any RepositoryBuilder().build() call - see ConfigCacheSafeSystemReader's
+    // own doc comment for why constructing a Repository otherwise shells out to the real git
+    // binary here, which the configuration cache doesn't allow.
+    ConfigCacheSafeSystemReader.install()
     def gitRepository = new RepositoryBuilder().readEnvironment().findGitDir(rootProject.projectDir).build()
     def originUrl = gitRepository.config.getString('remote', 'origin', 'url')
     def originMatch = originUrl ? (originUrl =~ /github\.com[:\/]([^\/]+)\/(.+?)(\.git)?$/) : null

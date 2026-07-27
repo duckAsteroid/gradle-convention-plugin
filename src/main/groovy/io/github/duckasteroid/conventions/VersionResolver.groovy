@@ -44,12 +44,14 @@ import java.util.regex.Pattern
  *
  * Deliberately uses JGit rather than shelling out to the `git` CLI: `resolveBuildVersion` is called
  * from `version = ...` in duckasteroid-java.gradle at Gradle *configuration* time, and starting an
- * external process during configuration is incompatible with the Gradle configuration cache (JGit is
- * a pure-Java implementation, so it doesn't trip that restriction - this is also why axion-release's
- * own JGit-based ghOwner/ghBranch detection in duckasteroid-java.gradle has always worked fine). The
- * release-flow tasks that call into this class only do so from `doLast { }` (task *execution* time,
- * where external processes are fine), but they share the same JGit-based code for simplicity and to
- * avoid two parallel implementations of the same logic.
+ * external process during configuration is incompatible with the Gradle configuration cache. JGit is
+ * a pure-Java implementation, but it is NOT automatically config-cache-safe on its own - the first
+ * time any code in the JVM constructs a {@code Repository}, JGit itself shells out to the real `git`
+ * binary to discover the system-level git config (see {@link ConfigCacheSafeSystemReader}, which
+ * {@link #withRepo} installs before every `RepositoryBuilder().build()` call in this class to
+ * suppress that). The release-flow tasks that call into this class only do so from `doLast { }`
+ * (task *execution* time, where external processes are fine), but they share the same JGit-based
+ * code for simplicity and to avoid two parallel implementations of the same logic.
  */
 class VersionResolver {
 
@@ -318,6 +320,10 @@ class VersionResolver {
 
     /** Opens the repository containing repoDir, runs action against it, and always closes it after. */
     private static <T> T withRepo(File repoDir, Closure<T> action) {
+        // Must run before any RepositoryBuilder().build() call - see ConfigCacheSafeSystemReader's
+        // own doc comment for why constructing a Repository otherwise shells out to the real git
+        // binary here, which the configuration cache doesn't allow.
+        ConfigCacheSafeSystemReader.install()
         Repository repo = new RepositoryBuilder().readEnvironment().findGitDir(repoDir).build()
         try {
             return action.call(repo)
