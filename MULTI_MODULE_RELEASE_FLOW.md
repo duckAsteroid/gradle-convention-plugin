@@ -58,7 +58,8 @@ touching only `:api/` produces a manifest with **two** entries: `:api` at `api/v
 `fix:` commit), and root at `v2.0.1-RC1` (root's `modulePath` is always empty, so it sees that same
 `api/`-scoped commit too and bumps alongside it).
 
-> **Known limitation: root's scope isn't exclusive of independently-versioned subprojects.** Because
+> **Known limitation: root's scope isn't exclusive of independently-versioned subprojects**
+> ([issue #8](https://github.com/duckAsteroid/gradle-convention-plugin/issues/8)). Because
 > root's `modulePath` is unrestricted (unchanged from how it already behaves for ordinary builds - see
 > [VERSIONING.md](VERSIONING.md)'s "Multi-module repositories" section), it sees every commit in the
 > repo, including ones under a subproject that has its *own* `duckasteroid-release-flow` application.
