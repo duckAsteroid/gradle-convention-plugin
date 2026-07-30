@@ -466,6 +466,11 @@ class VersionResolver {
      * PathFilterGroup combination, since that's exactly what `addPath` already does internally, and
      * doing it this way means we're relying on JGit's own tested implementation of "log -- path"
      * rather than a reimplementation of it.
+     *
+     * Merge commits (parentCount > 1) are excluded - their auto-generated "Merge branch 'develop'
+     * into release" messages don't conform to Conventional Commits, which would otherwise trigger
+     * the non-conforming-commit patch-bump fallback in {@link CommitAnalyzer} and add a meaningless
+     * line to every changelog. This mirrors `git log --no-merges`.
      */
     private static List<String> commitMessagesSince(Repository repo, ObjectId sinceCommitOrNull, String modulePath) {
         ObjectId headId = repo.resolve('HEAD')
@@ -481,7 +486,11 @@ class VersionResolver {
             logCommand = logCommand.addPath(modulePath)
         }
         List<String> messages = []
-        logCommand.call().each { RevCommit commit -> messages << commit.fullMessage }
+        logCommand.call().each { RevCommit commit ->
+            if (commit.parentCount <= 1) {
+                messages << commit.fullMessage
+            }
+        }
         return messages
     }
 }
