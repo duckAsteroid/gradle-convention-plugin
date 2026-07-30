@@ -1,8 +1,10 @@
+import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPluginExtension
 import io.github.duckasteroid.conventions.ChangelogExtension
 import io.github.duckasteroid.conventions.ChangelogGenerator
 import io.github.duckasteroid.conventions.ChangelogScope
 import io.github.duckasteroid.conventions.CommitAnalyzerExtension
+import io.github.duckasteroid.conventions.ReleaseManifest
 import io.github.duckasteroid.conventions.VersionResolver
 import io.github.duckasteroid.conventions.WorkflowChecker
 import io.github.duckasteroid.conventions.WorkflowInstaller
@@ -11,15 +13,21 @@ import io.github.duckasteroid.conventions.WorkflowInstaller
 // VERSIONING.md at the repo root. Apply alongside duckasteroid-java, which computes
 // project.ext.tagPrefix / project.ext.modulePath that these tasks reuse rather than recomputing.
 //
-// Six tasks total - tagReleaseCandidate/promoteReleaseCandidate are the release-time counterpart to
-// duckasteroid-java's ordinary-build version resolution (they don't just *compute* a version, they
-// actually create and push a tag for it); changelogForReleaseCandidate/changelogForRelease generate
-// the matching release notes (see below); installReleaseWorkflows/checkReleaseWorkflows (see issue
-// #2, further down) install/verify the GitHub Actions workflow files that invoke all four of the
-// above. All six are plain Gradle tasks, runnable locally as well as from CI - release engineering
-// shouldn't hard-depend on GitHub Actions being up. This repo's own .github/workflows/*.yml are a
-// human-readable reference for what installReleaseWorkflows installs (see VERSIONING.md) - this
-// repo can't apply its own plugins to itself, so they're not literally produced by that task here.
+// Eight tasks total. tagReleaseCandidate/promoteReleaseCandidate are the release-time counterpart
+// to duckasteroid-java's ordinary-build version resolution (they don't just *compute* a version,
+// they actually create and push a tag for it) for the applying project alone - handy for local,
+// single-module work. tagReleaseCandidates/promoteReleaseCandidates (plural - see below) are what
+// CI actually calls: they loop every project in the build that applies duckasteroid-release-flow,
+// so the same mechanism covers a single-module repo, several independently-versioned modules, or a
+// shared root version, without any of those shapes needing special-case configuration - see
+// MULTI_MODULE_RELEASE_FLOW.md. changelogForReleaseCandidate/changelogForRelease generate release
+// notes for the applying project alone (see below); installReleaseWorkflows/checkReleaseWorkflows
+// (see issue #2, further down) install/verify the GitHub Actions workflow files that invoke the
+// plural tasks above. All eight are plain Gradle tasks, runnable locally as well as from CI -
+// release engineering shouldn't hard-depend on GitHub Actions being up. This repo's own
+// .github/workflows/*.yml are a human-readable reference for what installReleaseWorkflows installs
+// (see VERSIONING.md) - this repo can't apply its own plugins to itself, so they're not literally
+// produced by that task here.
 //
 // tagReleaseCandidate/promoteReleaseCandidate respect release.forceVersion as the ultimate backstop,
 // same as the ordinary build version resolution in duckasteroid-java: if set, it's used verbatim, no
@@ -28,13 +36,19 @@ import io.github.duckasteroid.conventions.WorkflowInstaller
 // forgetting to check it. See
 // https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/
 // (The changelog tasks have no forceVersion equivalent - release notes are generated from whatever
-// commits are actually there regardless of what version they're attached to.)
+// commits are actually there regardless of what version they're attached to.) The plural aggregator
+// tasks respect the same property, applying it as a literal version to every project they loop over
+// - a deliberately blunt "release everything with this exact number" manual override, not a
+// per-project one.
 //
 // Task actions below capture everything they need (tagPrefix, modulePath, projectDir, the
 // forceVersion property) as plain local values during task *configuration*, and shell out via
 // plain ProcessBuilder rather than project.exec at *execution* time (inside doLast) - accessing the
 // live Project object from a task action at execution time is unsupported under the configuration
-// cache, so nothing in a doLast block below may reference `project` directly.
+// cache, so nothing in a doLast block below may reference `project` directly. The plural aggregator
+// tasks below follow the same rule: the list of applying projects is captured as plain data (File/
+// String/Map values, never live Project references) from a gradle.projectsEvaluated callback, which
+// runs at configuration time, not from inside their own doLast blocks.
 //
 // changelogForReleaseCandidate / changelogForRelease (see the `changelog { }` extension below)
 // generate release notes but don't tag anything - deliberately separate from tagReleaseCandidate/
@@ -42,7 +56,8 @@ import io.github.duckasteroid.conventions.WorkflowInstaller
 // so a CI job can generate notes, then tag, in that order (changelogForReleaseCandidate must run
 // BEFORE tagReleaseCandidate: it looks for the *previous* release-candidate tag reachable from HEAD,
 // which would incorrectly find the *new* RC tag instead if that tag already existed by the time it
-// ran).
+// ran). The plural aggregator tasks generate each project's changelog internally, in the same order,
+// as part of their own doLast - a CI job calling them doesn't need a separate changelog step first.
 
 def changelogExtension = project.extensions.create('changelog', ChangelogExtension)
 changelogExtension.rcScope.convention(ChangelogScope.SINCE_LAST_RELEASE)
@@ -123,6 +138,110 @@ tasks.register('changelogForRelease') {
     }
 }
 
+// tagReleaseCandidates / promoteReleaseCandidates (see MULTI_MODULE_RELEASE_FLOW.md for the full
+// design): the plural, multi-module-aware counterparts to the two singular tasks above. Registered
+// exactly once, on rootProject, no matter which (or how many) projects apply
+// duckasteroid-release-flow - Gradle's own unqualified `./gradlew <taskName>` matching already runs
+// a same-named task in *every* project that defines it, so registering these the same way as the
+// singular tasks above (once per applying project) would mean several independent aggregator
+// instances all running from one invocation, each redoing the full enumerate/skip/tag/manifest-write
+// cycle and racing on the same build/release-manifest.json - the exact bug these tasks exist to fix,
+// just moved up one level. The `rootProject.tasks.findByName(...) == null` guard below makes the
+// first applying project's script win; every subsequent one is a no-op.
+//
+// The list of applying projects is captured once, from rootProject.gradle.projectsEvaluated
+// (fires after every project in the build has finished configuring, regardless of which one applied
+// duckasteroid-release-flow first or last) as plain data - File/String/Map values only, no live
+// Project references - and closed over by the task's doLast block. Building that list inside doLast
+// itself instead would mean touching live Project objects at task *execution* time, which is
+// unsupported under the configuration cache (see the file-level comment above).
+if (rootProject.tasks.findByName('tagReleaseCandidates') == null) {
+    def manifestFile = rootProject.layout.buildDirectory.file('release-manifest.json').get().asFile
+    def rootDir = rootProject.projectDir
+    def forceVersion = rootProject.findProperty('release.forceVersion')
+    def aggregator = rootProject.tasks.register('tagReleaseCandidates') {
+        group = 'release'
+        description = 'Loops every project applying duckasteroid-release-flow, tags/pushes the next ' +
+                'release-candidate (and generates its changelog) for each one with qualifying commits ' +
+                'since its last release, skips the rest, and writes build/release-manifest.json for CI ' +
+                'to turn into GitHub Releases. Registered once on the root project regardless of which ' +
+                'project(s) apply duckasteroid-release-flow - see MULTI_MODULE_RELEASE_FLOW.md.'
+    }
+    rootProject.gradle.projectsEvaluated {
+        List<Map> targets = releaseFlowTargets(rootProject)
+        aggregator.configure {
+            doLast {
+                ReleaseManifest manifest = new ReleaseManifest()
+                targets.each { target ->
+                    File projectDir = target.projectDir as File
+                    String tagPrefix = target.tagPrefix as String
+                    String modulePath = target.modulePath as String
+                    Map typeRules = target.typeRules as Map
+                    String candidate = forceVersion ?: VersionResolver.resolveCandidateVersion(
+                            projectDir, tagPrefix, modulePath, ['v'], typeRules)
+                    String lastFinal = VersionResolver.lastFinalVersion(projectDir, tagPrefix, ['v'])
+                    if (candidate == lastFinal) {
+                        println "tagReleaseCandidates: skipping ${target.module} - no qualifying commits since ${tagPrefix}${lastFinal}"
+                        return
+                    }
+                    List<String> messages = VersionResolver.commitMessagesForChangelog(
+                            projectDir, tagPrefix, modulePath, ['v'], target.rcScope as ChangelogScope)
+                    File changelogFile = target.changelogFile as File
+                    writeChangelog(changelogFile, ChangelogGenerator.generate(messages, typeRules))
+                    String tag = VersionResolver.nextReleaseCandidateTag(projectDir, tagPrefix, candidate)
+                    createAndPushTag(projectDir, tag)
+                    manifest.add(target.module as String, tag, relativePath(rootDir, changelogFile))
+                }
+                manifest.writeTo(manifestFile)
+                println "tagReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
+            }
+        }
+    }
+}
+
+if (rootProject.tasks.findByName('promoteReleaseCandidates') == null) {
+    def manifestFile = rootProject.layout.buildDirectory.file('release-manifest.json').get().asFile
+    def rootDir = rootProject.projectDir
+    def forceVersion = rootProject.findProperty('release.forceVersion')
+    def aggregator = rootProject.tasks.register('promoteReleaseCandidates') {
+        group = 'release'
+        description = 'Loops every project applying duckasteroid-release-flow, promotes each one\'s ' +
+                'nearest reachable release-candidate to a final release (generating its release notes ' +
+                'first), skips projects with no pending RC, and writes build/release-manifest.json for ' +
+                'CI to turn into GitHub Releases. Registered once on the root project - see ' +
+                'MULTI_MODULE_RELEASE_FLOW.md.'
+    }
+    rootProject.gradle.projectsEvaluated {
+        List<Map> targets = releaseFlowTargets(rootProject)
+        aggregator.configure {
+            doLast {
+                ReleaseManifest manifest = new ReleaseManifest()
+                targets.each { target ->
+                    File projectDir = target.projectDir as File
+                    String tagPrefix = target.tagPrefix as String
+                    String tag
+                    try {
+                        tag = forceVersion ? "${tagPrefix}${forceVersion}" : VersionResolver.promoteTag(projectDir, tagPrefix)
+                    } catch (IllegalStateException ignored) {
+                        println "promoteReleaseCandidates: skipping ${target.module} - no release-candidate tag reachable from HEAD"
+                        return
+                    }
+                    // Must run BEFORE createAndPushTag below - see the file-level comment on
+                    // changelogForRelease/changelogForReleaseCandidate ordering.
+                    List<String> messages = VersionResolver.commitMessagesForChangelog(
+                            projectDir, tagPrefix, target.modulePath as String, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
+                    File changelogFile = target.changelogFile as File
+                    writeChangelog(changelogFile, ChangelogGenerator.generate(messages, target.typeRules as Map))
+                    createAndPushTag(projectDir, tag)
+                    manifest.add(target.module as String, tag, relativePath(rootDir, changelogFile))
+                }
+                manifest.writeTo(manifestFile)
+                println "promoteReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
+            }
+        }
+    }
+}
+
 // installReleaseWorkflows / checkReleaseWorkflows (see issue #2): install/verify a consumer's
 // release-candidate.yml/promote-release.yml GitHub Actions workflows, with staleness detection so
 // a consumer can tell whether their installed copy still matches what this plugin version would
@@ -132,85 +251,120 @@ tasks.register('changelogForRelease') {
 // deliberately NOT Gradle's expand()/GString syntax, since the workflow YAML itself contains live
 // '${{ github.token }}'-style GitHub Actions expressions that must survive untouched.
 //
+// There is exactly one workflow pair per repository, regardless of how many projects apply
+// duckasteroid-release-flow - like the plural tasks above, these are registered once on rootProject,
+// guarded the same way, so applying the plugin to several subprojects doesn't try to install the
+// same files several times over. The Java toolchain substituted into the template comes from
+// whichever project's script wins the guard (normally root, if root applies duckasteroid-java) -
+// see MULTI_MODULE_RELEASE_FLOW.md's "Installing the workflows" section for the current limitation
+// this implies if applying projects use differing toolchain versions.
+//
 // WorkflowInstaller/WorkflowChecker (plain Groovy classes, no Gradle dependency, unit-tested
 // directly) do the actual marker/hash comparison - see WorkflowMarker's doc comment for the
 // skip/overwrite rules. Resource bytes and the toolchain version are read at configuration time
 // (loadWorkflowResource() below, plus java.toolchain) and captured as plain local values, same
 // config-cache-safe pattern as the rest of this file: doLast blocks below never touch `project`.
-tasks.register('installReleaseWorkflows') {
-    group = 'release'
-    description = 'Installs the release-candidate/promote-release GitHub Actions workflows bundled with ' +
-            'this plugin into .github/workflows/, without clobbering files edited since a previous install ' +
-            '(use -Pduckasteroid.workflows.force=true to override).'
+if (rootProject.tasks.findByName('installReleaseWorkflows') == null) {
     def workflowsDir = new File(rootProject.projectDir, '.github/workflows')
     def javaVersion = project.extensions.getByType(JavaPluginExtension).toolchain.languageVersion.get().toString()
-    def force = project.hasProperty('duckasteroid.workflows.force')
+    def force = rootProject.hasProperty('duckasteroid.workflows.force')
     def pluginVersion = loadWorkflowResource('workflow-version.txt').trim()
     def templates = [
             'release-candidate.yml': loadWorkflowResource('release-candidate.yml'),
             'promote-release.yml'  : loadWorkflowResource('promote-release.yml'),
     ]
-    doLast {
-        templates.each { fileName, template ->
-            String body = template.replace('@@JAVA_VERSION@@', javaVersion)
-            File target = new File(workflowsDir, fileName)
-            WorkflowInstaller.Result result = WorkflowInstaller.install(target, pluginVersion, body, force)
-            switch (result) {
-                case WorkflowInstaller.Result.INSTALLED:
-                case WorkflowInstaller.Result.OVERWRITTEN:
-                case WorkflowInstaller.Result.FORCED:
-                    println "installReleaseWorkflows: wrote ${target} (${result})"
-                    break
-                case WorkflowInstaller.Result.UP_TO_DATE:
-                    println "installReleaseWorkflows: ${target} already up to date"
-                    break
-                case WorkflowInstaller.Result.SKIPPED_FOREIGN:
-                    logger.warn("installReleaseWorkflows: skipped ${target} - no duckasteroid marker found " +
-                            "(foreign or hand-written file); not overwriting it.")
-                    break
-                case WorkflowInstaller.Result.SKIPPED_MODIFIED:
-                    logger.warn("installReleaseWorkflows: skipped ${target} - edited since install (its body " +
-                            "no longer matches its marker hash); not overwriting it. Re-run with " +
-                            "-Pduckasteroid.workflows.force=true to discard those edits and take the new version.")
-                    break
+    rootProject.tasks.register('installReleaseWorkflows') {
+        group = 'release'
+        description = 'Installs the release-candidate/promote-release GitHub Actions workflows bundled with ' +
+                'this plugin into .github/workflows/, without clobbering files edited since a previous install ' +
+                '(use -Pduckasteroid.workflows.force=true to override). Registered once on the root project ' +
+                'regardless of which project(s) apply duckasteroid-release-flow.'
+        doLast {
+            templates.each { fileName, template ->
+                String body = template.replace('@@JAVA_VERSION@@', javaVersion)
+                File target = new File(workflowsDir, fileName)
+                WorkflowInstaller.Result result = WorkflowInstaller.install(target, pluginVersion, body, force)
+                switch (result) {
+                    case WorkflowInstaller.Result.INSTALLED:
+                    case WorkflowInstaller.Result.OVERWRITTEN:
+                    case WorkflowInstaller.Result.FORCED:
+                        println "installReleaseWorkflows: wrote ${target} (${result})"
+                        break
+                    case WorkflowInstaller.Result.UP_TO_DATE:
+                        println "installReleaseWorkflows: ${target} already up to date"
+                        break
+                    case WorkflowInstaller.Result.SKIPPED_FOREIGN:
+                        logger.warn("installReleaseWorkflows: skipped ${target} - no duckasteroid marker found " +
+                                "(foreign or hand-written file); not overwriting it.")
+                        break
+                    case WorkflowInstaller.Result.SKIPPED_MODIFIED:
+                        logger.warn("installReleaseWorkflows: skipped ${target} - edited since install (its body " +
+                                "no longer matches its marker hash); not overwriting it. Re-run with " +
+                                "-Pduckasteroid.workflows.force=true to discard those edits and take the new version.")
+                        break
+                }
             }
         }
     }
 }
 
-tasks.register('checkReleaseWorkflows') {
-    group = 'release'
-    description = 'Warns (never fails) if the installed release workflows are missing, unmarked, edited ' +
-            'since install, or older than the currently applied duckasteroid-release-flow version. Not ' +
-            'wired into build/check, so it never adds noise to an ordinary CI run.'
+if (rootProject.tasks.findByName('checkReleaseWorkflows') == null) {
     def workflowsDir = new File(rootProject.projectDir, '.github/workflows')
     def pluginVersion = loadWorkflowResource('workflow-version.txt').trim()
     def fileNames = ['release-candidate.yml', 'promote-release.yml']
-    doLast {
-        fileNames.each { fileName ->
-            File target = new File(workflowsDir, fileName)
-            WorkflowChecker.CheckResult result = WorkflowChecker.check(target, pluginVersion)
-            switch (result.status) {
-                case WorkflowChecker.Status.UP_TO_DATE:
-                    println "checkReleaseWorkflows: ${target} is up to date (${pluginVersion})"
-                    break
-                case WorkflowChecker.Status.MISSING:
-                    logger.warn("checkReleaseWorkflows: ${target} does not exist - run installReleaseWorkflows to install it.")
-                    break
-                case WorkflowChecker.Status.NOT_OURS:
-                    logger.warn("checkReleaseWorkflows: ${target} has no duckasteroid marker - it wasn't installed by installReleaseWorkflows.")
-                    break
-                case WorkflowChecker.Status.TAMPERED:
-                    logger.warn("checkReleaseWorkflows: ${target} has been edited since install (its body no " +
-                            "longer matches its marker hash from version ${result.installedVersion}).")
-                    break
-                case WorkflowChecker.Status.STALE:
-                    logger.warn("checkReleaseWorkflows: ${target} was installed from duckasteroid-release-flow " +
-                            "${result.installedVersion}, but ${pluginVersion} is currently applied - run " +
-                            "installReleaseWorkflows to update it.")
-                    break
+    rootProject.tasks.register('checkReleaseWorkflows') {
+        group = 'release'
+        description = 'Warns (never fails) if the installed release workflows are missing, unmarked, edited ' +
+                'since install, or older than the currently applied duckasteroid-release-flow version. Not ' +
+                'wired into build/check, so it never adds noise to an ordinary CI run. Registered once on the ' +
+                'root project regardless of which project(s) apply duckasteroid-release-flow.'
+        doLast {
+            fileNames.each { fileName ->
+                File target = new File(workflowsDir, fileName)
+                WorkflowChecker.CheckResult result = WorkflowChecker.check(target, pluginVersion)
+                switch (result.status) {
+                    case WorkflowChecker.Status.UP_TO_DATE:
+                        println "checkReleaseWorkflows: ${target} is up to date (${pluginVersion})"
+                        break
+                    case WorkflowChecker.Status.MISSING:
+                        logger.warn("checkReleaseWorkflows: ${target} does not exist - run installReleaseWorkflows to install it.")
+                        break
+                    case WorkflowChecker.Status.NOT_OURS:
+                        logger.warn("checkReleaseWorkflows: ${target} has no duckasteroid marker - it wasn't installed by installReleaseWorkflows.")
+                        break
+                    case WorkflowChecker.Status.TAMPERED:
+                        logger.warn("checkReleaseWorkflows: ${target} has been edited since install (its body no " +
+                                "longer matches its marker hash from version ${result.installedVersion}).")
+                        break
+                    case WorkflowChecker.Status.STALE:
+                        logger.warn("checkReleaseWorkflows: ${target} was installed from duckasteroid-release-flow " +
+                                "${result.installedVersion}, but ${pluginVersion} is currently applied - run " +
+                                "installReleaseWorkflows to update it.")
+                        break
+                }
             }
         }
+    }
+}
+
+/**
+ * Every project in root's build that has duckasteroid-release-flow applied, as plain data (File/
+ * String/Map values only, never live Project references - see the file-level comment above for why)
+ * for the plural aggregator tasks to loop over. Must be called from a configuration-time hook (e.g.
+ * rootProject.gradle.projectsEvaluated) after every project has finished applying its plugins, not
+ * from inside a task's doLast.
+ */
+static List<Map> releaseFlowTargets(Project root) {
+    return root.allprojects.findAll { it.pluginManager.hasPlugin('duckasteroid-release-flow') }.collect { Project p ->
+        [
+                module      : p.path,
+                projectDir  : p.projectDir,
+                tagPrefix   : p.ext.tagPrefix,
+                modulePath  : p.ext.modulePath,
+                typeRules   : p.extensions.getByType(CommitAnalyzerExtension).toTypeRules(),
+                rcScope     : p.extensions.getByType(ChangelogExtension).rcScope.get(),
+                changelogFile: p.layout.buildDirectory.file('changelog.md').get().asFile,
+        ]
     }
 }
 
@@ -235,6 +389,11 @@ def writeChangelog(File outputFile, String changelog) {
 def createAndPushTag(File repoDir, String tag) {
     runGit(repoDir, 'tag', '-a', tag, '-m', "Release ${tag}")
     runGit(repoDir, 'push', 'origin', tag)
+}
+
+/** file's path relative to base, with forward slashes regardless of OS - for the JSON manifest. */
+static String relativePath(File base, File file) {
+    return base.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/' as char)
 }
 
 /**
