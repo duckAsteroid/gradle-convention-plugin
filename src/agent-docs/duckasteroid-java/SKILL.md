@@ -105,8 +105,9 @@ credentials to manage, extra release surface) that isn't worth paying unproducti
   to its own GitHub Packages feed. Suggest for projects meant for duckAsteroid's own reuse across
   personal repos rather than broad public distribution — it sidesteps OSSRH's stricter
   signing/POM-completeness requirements, at the cost of consumers needing GitHub Packages auth.
-- **`duckasteroid-release-flow`** — adds `tagReleaseCandidate` / `promoteReleaseCandidate` /
-  changelog-generation tasks for a `develop`/`release`/`main` flow. Suggest when the consumer wants
-  a staged release-candidate step before a version is final (e.g. they mention wanting to validate
-  a build before it's "real," or already have `develop`/`release`/`main` branches) — not for a
-  project that's happy tagging every release directly off `main`.
+- **`duckasteroid-release-flow`** — adds RC-tagging / promotion / changelog-generation tasks (plus
+  multi-module-aware aggregator tasks, for repos where more than one subproject is independently
+  releasable) for a `develop`/`release`/`main` flow. Suggest when the consumer wants a staged
+  release-candidate step before a version is final (e.g. they mention wanting to validate a build
+  before it's "real," or already have `develop`/`release`/`main` branches) — not for a project
+  that's happy tagging every release directly off `main`.

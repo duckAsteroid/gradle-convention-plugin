@@ -1,12 +1,13 @@
 ---
-description: Opt-in duckAsteroid Gradle release-engineering plugin implementing a develop/release/main git flow, with RC tagging, final-release promotion, changelog generation, and GitHub Actions workflow install/staleness-check tasks. Apply alongside duckasteroid-java, whose VersionResolver it reuses.
+description: Opt-in duckAsteroid Gradle release-engineering plugin implementing a develop/release/main git flow, with RC tagging, final-release promotion, changelog generation, multi-module-aware aggregator tasks, and GitHub Actions workflow install/staleness-check tasks. Apply alongside duckasteroid-java, whose VersionResolver it reuses.
 ---
 
 # duckasteroid-release-flow
 
 Opt-in release-engineering plugin for a `develop`/`release` → `main` git flow: `release`
 accumulates release-candidate builds before an accepted RC is promoted to a final release on
-`main`.
+`main`. Works the same whether the repo releases as a single unit or as several
+independently-versioned modules.
 
 ```groovy
 plugins {
@@ -17,24 +18,42 @@ plugins {
 
 ## Tasks
 
-Six tasks total, all plain Gradle tasks, runnable locally as well as from CI:
+Eight tasks total, all plain Gradle tasks, runnable locally as well as from CI. Four are
+single-project (act on whichever project applies the plugin); four are multi-module-aware
+aggregators registered exactly once, on `rootProject`, no matter how many (or which) projects
+apply the plugin.
 
-- **`tagReleaseCandidate`** — tags/pushes the next `X.Y.Z-RCn` (auto-incrementing `n`), derived
-  from `VersionResolver` (or `-Prelease.forceVersion` if set). Intended to run on every push to
-  `release`.
-- **`promoteReleaseCandidate`** — strips the `-RCn` suffix off the nearest reachable RC tag and
-  tags/pushes the final `X.Y.Z` (or `-Prelease.forceVersion` if set). Intended to run on every push
-  to `main`.
+**Single-project:**
+
+- **`tagReleaseCandidate`** — tags/pushes the next `X.Y.Z-RCn` for *this* project alone (auto-
+  incrementing `n`), derived from `VersionResolver` (or `-Prelease.forceVersion` if set). Useful
+  for local, single-module work.
+- **`promoteReleaseCandidate`** — strips the `-RCn` suffix off *this* project's nearest reachable
+  RC tag and tags/pushes the final `X.Y.Z` (or `-Prelease.forceVersion` if set).
 - **`changelogForReleaseCandidate`** / **`changelogForRelease`** — generate Markdown release notes
-  to `build/changelog.md`, for a CI step to feed into `gh release create --notes-file`. These are
-  deliberately separate from the tag/promote tasks (so notes can be previewed locally before
-  actually cutting a release), but **must run before** their tagging counterpart in the same job —
-  they look for the *previous* RC tag / the last *final* tag reachable from HEAD, which the
-  about-to-be-created new tag would otherwise shadow.
-- **`installReleaseWorkflows`** — installs the two GitHub Actions workflows this plugin's tasks are
-  meant to run from (`.github/workflows/release-candidate.yml` / `promote-release.yml`, bundled
-  with the plugin) into the consumer project. Never clobbers a file it doesn't recognize as its
-  own:
+  for *this* project to `build/changelog.md`. Only needed for local preview or the single-project
+  singular tasks above — the aggregator tasks below generate each project's changelog internally.
+
+**Multi-module aggregators (what CI actually calls):**
+
+- **`tagReleaseCandidates`** — the task the bundled `release-candidate.yml` workflow runs on every
+  push to `release`. Enumerates every project in the build with `duckasteroid-release-flow`
+  applied, computes each one's candidate version exactly as an ordinary build would
+  (`VersionResolver`, using that project's own `tagPrefix`/`modulePath`), skips any project whose
+  candidate equals its last-final version (nothing qualifying changed under its own directory),
+  and for every project that *does* qualify: generates its changelog, mints and pushes its own RC
+  tag, and records `{module, tag, changelog}` in `build/release-manifest.json` at the repo root.
+  A push touching one module produces one manifest entry; a push touching several produces
+  several, each versioned independently; a push with no qualifying commits anywhere produces an
+  empty manifest (not an error).
+- **`promoteReleaseCandidates`** — the `main`-push counterpart. Same enumeration, but promotes
+  each applying project's nearest reachable RC tag to final; a project with no pending RC this
+  cycle is skipped rather than failing the whole task.
+- **`installReleaseWorkflows`** — installs the two GitHub Actions workflows the aggregator tasks
+  above are meant to run from (`.github/workflows/release-candidate.yml` /
+  `promote-release.yml`, bundled with the plugin) into the consumer project. Registered once on
+  `rootProject` — applying the plugin to several subprojects doesn't install multiple copies or
+  race on the same two files. Never clobbers a file it doesn't recognize as its own:
   - No file at that path → installs it.
   - File present, no `# duckasteroid-workflow-version: ...` marker comment as the first line →
     treated as foreign/hand-written → **skipped**, with a warning.
@@ -43,8 +62,10 @@ Six tasks total, all plain Gradle tasks, runnable locally as well as from CI:
   - File present, marker found, hash does **not** match → edited locally since install →
     **skipped**, with a warning pointing at `-Pduckasteroid.workflows.force=true` to discard those
     edits and take the new version anyway.
-  - The one per-consumer variable (the Java toolchain version) is filled in from the applied `java`
-    toolchain at install time — no manual editing needed after install.
+  - The one per-consumer variable (the Java toolchain version) is filled in from whichever
+    applying project's script wins the registration guard (normally root, if root applies
+    `duckasteroid-java`) — see "Multi-module scoping" below for the limitation this implies when
+    applying projects use different Java versions.
 - **`checkReleaseWorkflows`** — read-only counterpart to `installReleaseWorkflows`: warns (never
   fails the build) if an installed workflow file is missing, has no marker, has been edited since
   install (hash mismatch), or was installed from an older `duckasteroid-release-flow` version than
@@ -57,9 +78,30 @@ verifies, so it only guards against the realistic accident (editing a step witho
 marker comment), not someone deliberately recomputing a matching hash. That's an accepted tradeoff,
 not a bug.
 
+## Multi-module scoping
+
+Apply `duckasteroid-release-flow` to whichever projects should be independently releasable — just
+the root, just a subset of subprojects, or every project. Three shapes fall out of the same
+mechanism (see `MULTI_MODULE_RELEASE_FLOW.md` for the full writeup with worked examples):
+
+- **Fully independent modules** — apply only to subprojects, not root. A push touching `:api`
+  alone releases `:api` alone; `:web` is silently skipped.
+- **One global version for the whole repo** — apply only at the root even with subprojects
+  present. Root's unrestricted `modulePath` means any commit anywhere counts toward the one shared
+  version.
+- **Mixed** — apply at root *and* to specific subprojects needing independent versioning. Known
+  limitation: root's scope isn't currently exclusive of opted-in subprojects' paths, so root ends
+  up tagged on essentially every qualifying push, not just changes outside those subprojects (see
+  [issue #8](https://github.com/duckAsteroid/gradle-convention-plugin/issues/8)).
+
+`installReleaseWorkflows`'s Java-toolchain substitution picks up whichever applying project's
+script wins the registration guard first — if applying projects use different Java versions, the
+installed workflow's single `setup-java` step can't represent that; not yet designed.
+
 ## `changelog { }` extension
 
-Controls `changelogForReleaseCandidate`'s "since" boundary via `rcScope`:
+Controls `changelogForReleaseCandidate`'s (and the `tagReleaseCandidates` aggregator's) "since"
+boundary via `rcScope`:
 
 ```groovy
 changelog {
@@ -71,8 +113,8 @@ changelog {
 - `SINCE_PREVIOUS_RC` — just the delta since the previous RC, falling back to
   `SINCE_LAST_RELEASE` automatically when there's no previous RC yet.
 
-`changelogForRelease` always uses `SINCE_LAST_RELEASE`, regardless of this setting — a final
-release's notes should be the complete picture.
+`changelogForRelease` and `promoteReleaseCandidates` always use `SINCE_LAST_RELEASE`, regardless of
+this setting — a final release's notes should be the complete picture.
 
 ## Typical CI wiring
 
@@ -80,10 +122,11 @@ Run `./gradlew installReleaseWorkflows` once (locally, or as a one-off task) to 
 workflow files below into `.github/workflows/` — re-run it after upgrading the plugin to pick up
 template changes.
 
-- On push to `release`: `changelogForReleaseCandidate` (must run first) then `tagReleaseCandidate`,
-  then `publish`.
-- On push to `main`: `changelogForRelease` (must run first) then `promoteReleaseCandidate`, then
-  `publish`.
+- On push to `release`: `tagReleaseCandidates` (generates each qualifying project's changelog and
+  mints its RC tag internally, no separate changelog step needed first), then one GitHub
+  pre-release per `build/release-manifest.json` entry, then `publish`.
+- On push to `main`: `promoteReleaseCandidates` (same internal changelog generation), then one
+  GitHub release per manifest entry, then `publish`.
 
 Both jobs should be self-contained (tag-then-publish in one job) — a tag pushed with the default
 `GITHUB_TOKEN` does not trigger other workflow runs, so a separate publish-on-tag workflow would
