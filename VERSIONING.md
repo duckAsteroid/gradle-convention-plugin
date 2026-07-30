@@ -151,29 +151,36 @@ computed candidate version into an actual, pushed git tag, plus matching release
  develop/feature branches          release                          main
 ──────────────────────────► merge ──────────────────► merge ──────────────────►
   every build:                each push:                each push:
-  X.Y.Z-SNAPSHOT               changelogForReleaseCandidate  changelogForRelease
-  (feature branches:            tagReleaseCandidate           promoteReleaseCandidate
-   X.Y.Z-branch-SNAPSHOT)       → X.Y.Z-RC1, RC2, ...          → strips "-RCn"
-                                                                → X.Y.Z (final)
+  X.Y.Z-SNAPSHOT               tagReleaseCandidates          promoteReleaseCandidates
+  (feature branches:            → X.Y.Z-RC1, RC2, ...          → strips "-RCn"
+   X.Y.Z-branch-SNAPSHOT)        (per affected module)          → X.Y.Z (final, per module)
 ```
 
-- **`tagReleaseCandidate`** computes the candidate version (same computation as an ordinary build,
-  minus the `-SNAPSHOT` decoration) and mints the next `X.Y.Z-RCn` tag for it - `RC1` the first time
-  a given candidate version is tagged, `RC2`/`RC3`/... on each subsequent invocation for the *same*
-  candidate. Intended to run on every push to `release`, so merging accepted work from `develop` into
-  `release` automatically starts the RC cycle - and further commits on `release` (a fix spotted
-  during RC testing, say) automatically advance it - with no manual version bookkeeping anywhere.
-- **`promoteReleaseCandidate`** finds the nearest release-candidate tag reachable from the current
-  commit and strips its `-RCn` suffix to produce the final release tag. Intended to run on every push
-  to `main` - i.e. once an accepted RC has been merged from `release`.
-- **`changelogForReleaseCandidate`** / **`changelogForRelease`** generate the matching Markdown
-  release notes (see "Generating release notes" below) - each **must run before** its
-  tagging/promoting counterpart in the same job, since they look for the *previous* RC tag / the
+- **`tagReleaseCandidates`** (registered once on the root project regardless of where
+  `duckasteroid-release-flow` is applied; see "Release automation across multiple modules" below) finds
+  every project applying `duckasteroid-release-flow`, and for each one whose candidate version has
+  actually moved since its last final release, generates its changelog and mints the next `X.Y.Z-RCn`
+  tag for it - `RC1` the first time a given candidate version is tagged, `RC2`/`RC3`/... on each
+  subsequent invocation for the *same* candidate. Intended to run on every push to `release`, so
+  merging accepted work from `develop` into `release` automatically starts the RC cycle for whichever
+  modules it actually touched - and further commits on `release` (a fix spotted during RC testing, say)
+  automatically advance it - with no manual version bookkeeping anywhere. `tagReleaseCandidate`
+  (singular) is the same computation for a single project, still available for local/manual use.
+- **`promoteReleaseCandidates`** (also registered once on the root project) does the same for every project that has a
+  release-candidate tag reachable from the current commit, stripping its `-RCn` suffix to produce the
+  final release tag - skipping any applying project that has nothing pending this cycle. Intended to
+  run on every push to `main`, i.e. once an accepted RC has been merged from `release`.
+  `promoteReleaseCandidate` (singular) remains available for a single project.
+- **`changelogForReleaseCandidate`** / **`changelogForRelease`** generate a single project's Markdown
+  release notes (see "Generating release notes" below) for local preview; `tagReleaseCandidates` /
+  `promoteReleaseCandidates` generate each affected module's changelog internally as part of the same
+  run, before minting that module's tag, for the same reason a standalone invocation must run before
+  its tagging/promoting counterpart - the changelog generator looks for the *previous* RC tag / the
   last *final* tag reachable from HEAD, which the about-to-be-created new tag would otherwise shadow.
 
-Six tasks total - the four above, plus `installReleaseWorkflows`/`checkReleaseWorkflows` (install and
+Eight tasks total - the six above, plus `installReleaseWorkflows`/`checkReleaseWorkflows` (install and
 verify the two GitHub Actions workflows that invoke them; see "Installing the release workflows"
-below). All are plain Gradle tasks (`./gradlew tagReleaseCandidate`, etc.), runnable locally as well as
+below). All are plain Gradle tasks (`./gradlew tagReleaseCandidates`, etc.), runnable locally as well as
 from CI - release engineering doesn't hard-depend on GitHub Actions being available.
 [`.github/workflows/release-candidate.yml`](.github/workflows/release-candidate.yml) and
 [`promote-release.yml`](.github/workflows/promote-release.yml) are this repo's own **live** workflows,
@@ -310,6 +317,28 @@ A`), then a commit touching only `moduleB/` (`feat: big feature in module B`) - 
 `2.0.1-SNAPSHOT` (only sees its own `fix:` commit), `moduleB` computes `2.1.0-SNAPSHOT` (only sees its
 own `feat:` commit), and the root project (no path restriction) computes `2.1.0-SNAPSHOT` (sees both,
 highest bump wins).
+
+### Release automation across multiple modules
+
+Everything above is about how a *version number* is computed per module - it applies equally to an
+ordinary build and to `duckasteroid-release-flow`. Turning that computation into actual pushed tags and
+GitHub Releases for several independently-versioned modules in one repository is covered in full in
+[MULTI_MODULE_RELEASE_FLOW.md](MULTI_MODULE_RELEASE_FLOW.md); in short:
+
+- Apply `duckasteroid-release-flow` to whichever projects should be independently releasable - just the
+  root (one shared version for the whole repo), just a subset of subprojects (fully independent
+  modules), or both (a mix).
+- `tagReleaseCandidates` / `promoteReleaseCandidates` (registered once on the root project regardless of
+  where `duckasteroid-release-flow` is applied, see above) run once per push, loop over every applying
+  project, skip any whose candidate version hasn't moved, and write a manifest
+  (`build/release-manifest.json`) of `{module, tag, changelog}` for the ones that did - the bundled
+  workflow creates one GitHub Release per manifest entry rather than assuming exactly one tag landed on
+  the pushed commit.
+- `installReleaseWorkflows`/`checkReleaseWorkflows` are likewise registered exactly once, regardless of how
+  many projects apply `duckasteroid-release-flow` - one workflow pair per repository.
+- Root's `modulePath` is always empty (see above), so in mixed mode root is not scoped *away* from an
+  independently-versioned subproject's changes - see MULTI_MODULE_RELEASE_FLOW.md's "known limitation"
+  note for what that means in practice.
 
 ## Why JGit, not the `git` CLI
 
