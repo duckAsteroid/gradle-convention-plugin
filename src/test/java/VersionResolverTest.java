@@ -79,6 +79,26 @@ public class VersionResolverTest {
   }
 
   @Test
+  void mergeCommitsAreExcludedFromVersionBumpAndChangelog() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    git("checkout", "-b", "feature");
+    commit("chore: internal note");
+    git("checkout", "-");
+    git("merge", "--no-ff", "-m", "Merge branch 'feature'", "feature");
+
+    // The auto-generated merge commit message doesn't conform to Conventional Commits. If it were
+    // counted, the non-conforming-commit fallback in CommitAnalyzer would bump this to 1.0.1 even
+    // though the only real commit ("chore: internal note") maps to no bump at all.
+    assertEquals("1.0.0", VersionResolver.resolveCandidateVersion(repo, PREFIX));
+
+    List<String> messages = VersionResolver.commitMessagesForChangelog(
+        repo, PREFIX, "", List.of(), ChangelogScope.SINCE_LAST_RELEASE);
+    assertEquals(1, messages.size());
+    assertTrue(messages.get(0).contains("internal note"));
+  }
+
+  @Test
   void buildVersionReturnsExactTagStrippedOfPrefixWhenHeadIsOnOne() throws Exception {
     commit("chore: init");
     tag("v1.0.0");
