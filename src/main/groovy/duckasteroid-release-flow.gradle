@@ -4,6 +4,7 @@ import io.github.duckasteroid.conventions.ChangelogExtension
 import io.github.duckasteroid.conventions.ChangelogGenerator
 import io.github.duckasteroid.conventions.ChangelogScope
 import io.github.duckasteroid.conventions.CommitAnalyzerExtension
+import io.github.duckasteroid.conventions.ReleaseGitOps
 import io.github.duckasteroid.conventions.ReleaseManifest
 import io.github.duckasteroid.conventions.VersionResolver
 import io.github.duckasteroid.conventions.WorkflowChecker
@@ -84,7 +85,7 @@ tasks.register('tagReleaseCandidate') {
         String candidate = forceVersion ?:
                 VersionResolver.resolveCandidateVersion(repoDir, tagPrefix, modulePath, ['v'], typeRules)
         String tag = VersionResolver.nextReleaseCandidateTag(repoDir, tagPrefix, candidate)
-        createAndPushTag(repoDir, tag)
+        ReleaseGitOps.createAndPushTag(repoDir, tag)
     }
 }
 
@@ -102,7 +103,7 @@ tasks.register('promoteReleaseCandidate') {
         // already exists, already under this module's own tagPrefix. Intended to run on every push
         // to `main` once an accepted RC has been merged there from `release`.
         String tag = forceVersion ? "${tagPrefix}${forceVersion}" : VersionResolver.promoteTag(repoDir, tagPrefix)
-        createAndPushTag(repoDir, tag)
+        ReleaseGitOps.createAndPushTag(repoDir, tag)
     }
 }
 
@@ -118,7 +119,7 @@ tasks.register('changelogForReleaseCandidate') {
     def outputFile = project.layout.buildDirectory.file('changelog.md').get().asFile
     doLast {
         List<String> messages = VersionResolver.commitMessagesForChangelog(repoDir, tagPrefix, modulePath, ['v'], rcScope)
-        writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
+        ReleaseGitOps.writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
     }
 }
 
@@ -134,7 +135,7 @@ tasks.register('changelogForRelease') {
     doLast {
         List<String> messages = VersionResolver.commitMessagesForChangelog(
                 repoDir, tagPrefix, modulePath, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
-        writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
+        ReleaseGitOps.writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
     }
 }
 
@@ -187,10 +188,10 @@ if (rootProject.tasks.findByName('tagReleaseCandidates') == null) {
                     List<String> messages = VersionResolver.commitMessagesForChangelog(
                             projectDir, tagPrefix, modulePath, ['v'], target.rcScope as ChangelogScope)
                     File changelogFile = target.changelogFile as File
-                    writeChangelog(changelogFile, ChangelogGenerator.generate(messages, typeRules))
+                    ReleaseGitOps.writeChangelog(changelogFile, ChangelogGenerator.generate(messages, typeRules))
                     String tag = VersionResolver.nextReleaseCandidateTag(projectDir, tagPrefix, candidate)
-                    createAndPushTag(projectDir, tag)
-                    manifest.add(target.module as String, tag, relativePath(rootDir, changelogFile))
+                    ReleaseGitOps.createAndPushTag(projectDir, tag)
+                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile))
                 }
                 manifest.writeTo(manifestFile)
                 println "tagReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
@@ -231,9 +232,9 @@ if (rootProject.tasks.findByName('promoteReleaseCandidates') == null) {
                     List<String> messages = VersionResolver.commitMessagesForChangelog(
                             projectDir, tagPrefix, target.modulePath as String, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
                     File changelogFile = target.changelogFile as File
-                    writeChangelog(changelogFile, ChangelogGenerator.generate(messages, target.typeRules as Map))
-                    createAndPushTag(projectDir, tag)
-                    manifest.add(target.module as String, tag, relativePath(rootDir, changelogFile))
+                    ReleaseGitOps.writeChangelog(changelogFile, ChangelogGenerator.generate(messages, target.typeRules as Map))
+                    ReleaseGitOps.createAndPushTag(projectDir, tag)
+                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile))
                 }
                 manifest.writeTo(manifestFile)
                 println "promoteReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
@@ -376,38 +377,4 @@ static String loadWorkflowResource(String fileName) {
         throw new IllegalStateException("Missing bundled resource: ${path}")
     }
     stream.withStream { it.getText('UTF-8') }
-}
-
-/** Writes generated changelog Markdown to outputFile, creating parent directories as needed. */
-def writeChangelog(File outputFile, String changelog) {
-    outputFile.parentFile.mkdirs()
-    outputFile.text = changelog
-    println "Changelog written to ${outputFile}"
-}
-
-/** Creates an annotated tag at HEAD and pushes it to `origin` - the only state-mutating step here. */
-def createAndPushTag(File repoDir, String tag) {
-    runGit(repoDir, 'tag', '-a', tag, '-m', "Release ${tag}")
-    runGit(repoDir, 'push', 'origin', tag)
-}
-
-/** file's path relative to base, with forward slashes regardless of OS - for the JSON manifest. */
-static String relativePath(File base, File file) {
-    return base.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/' as char)
-}
-
-/**
- * Plain ProcessBuilder rather than project.exec (see file-level comment above for why) or
- * VersionResolver's JGit plumbing (pushing a tag needs real push credentials - the `git` CLI
- * transparently reuses whatever's already configured, both locally and via actions/checkout's
- * persisted GITHUB_TOKEN in CI, with no extra credential wiring needed here).
- */
-def runGit(File repoDir, String... args) {
-    List<String> command = ['git'] + (args as List<String>)
-    Process process = new ProcessBuilder(command).directory(repoDir).redirectErrorStream(true).start()
-    String output = process.inputStream.getText('UTF-8')
-    int exit = process.waitFor()
-    if (exit != 0) {
-        throw new RuntimeException("git ${args.join(' ')} failed (${exit}): ${output.trim()}")
-    }
 }
