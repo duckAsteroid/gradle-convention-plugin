@@ -191,6 +191,35 @@ the GitHub Release with `--notes-file`, `gradlew publish`) rather than relying o
 trigger a separate workflow, because a tag pushed with the default `GITHUB_TOKEN` doesn't trigger
 other workflow runs.
 
+## Pruning superseded release candidates
+
+Release candidates aren't permanent - only whichever one eventually gets promoted matters, and any
+earlier RC in the same cycle is either absorbed into a later one or simply abandoned. By default,
+`tagReleaseCandidates` deletes every previous RC's **GitHub Release** for that module (never the git
+tag, never the already-published package) as soon as a newer RC exists - including across a version
+change mid-cycle: if a qualifying commit raises the bump (e.g. `v1.4.0-RC3` followed by
+`v1.4.1-RC1`, a "leapfrog"), `v1.4.0-RC3`'s Release still gets superseded even though its base
+version differs from the new one. Both `tagReleaseCandidate` and `tagReleaseCandidates` also print a
+stderr warning whenever a leapfrog happens - purely informational, never blocks, same philosophy as
+the non-conforming-commit warning above.
+
+Configurable via the `releaseCandidates { }` extension:
+
+```groovy
+releaseCandidates {
+    pruneSuperseded = false   // default: true - keep every RC's GitHub Release forever instead
+    retain = 2                // default: 0 - also keep the 2 most recent RCs besides the new one,
+                               // counted by recency, not by version
+}
+```
+
+`tagReleaseCandidates` records which tags got superseded in each `build/release-manifest.json`
+entry's `supersededTags` field - see "The manifest" in `MULTI_MODULE_RELEASE_FLOW.md` - which the
+bundled workflow turns into one `gh release delete` per tag (see [issue
+#6](https://github.com/duckAsteroid/gradle-convention-plugin/issues/6)). `promoteReleaseCandidate(s)`
+never prunes anything itself: by the time a promotion happens there's only ever one live RC for that
+module, since each new RC already superseded the one before it.
+
 ## Installing the release workflows
 
 `./gradlew installReleaseWorkflows` copies the bundled `release-candidate.yml`/`promote-release.yml`

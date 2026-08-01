@@ -4,6 +4,8 @@ import io.github.duckasteroid.conventions.ChangelogExtension
 import io.github.duckasteroid.conventions.ChangelogGenerator
 import io.github.duckasteroid.conventions.ChangelogScope
 import io.github.duckasteroid.conventions.CommitAnalyzerExtension
+import io.github.duckasteroid.conventions.ReleaseCandidatesExtension
+import io.github.duckasteroid.conventions.ReleaseGitOps
 import io.github.duckasteroid.conventions.ReleaseManifest
 import io.github.duckasteroid.conventions.VersionResolver
 import io.github.duckasteroid.conventions.WorkflowChecker
@@ -58,9 +60,23 @@ import io.github.duckasteroid.conventions.WorkflowInstaller
 // which would incorrectly find the *new* RC tag instead if that tag already existed by the time it
 // ran). The plural aggregator tasks generate each project's changelog internally, in the same order,
 // as part of their own doLast - a CI job calling them doesn't need a separate changelog step first.
+//
+// releaseCandidates { } (see the extension below and VERSIONING.md's "Pruning superseded release
+// candidates") controls what tagReleaseCandidate(s) does once a new RC exists for a module: release
+// candidates aren't permanent, so by default every previous RC's GitHub Release (never its tag or
+// published package) is deleted, regardless of whether the candidate version itself changed
+// mid-cycle. tagReleaseCandidates records what got superseded per module in each
+// build/release-manifest.json entry's supersededTags field for the CI workflow to act on;
+// tagReleaseCandidate (singular) only prints the leapfrog warning below, since it has no GitHub
+// integration point of its own to prune anything through. promoteReleaseCandidate(s) never prunes -
+// by the time a promotion happens there's only ever one live RC for that module left to promote.
 
 def changelogExtension = project.extensions.create('changelog', ChangelogExtension)
 changelogExtension.rcScope.convention(ChangelogScope.SINCE_LAST_RELEASE)
+
+def releaseCandidatesExtension = project.extensions.create('releaseCandidates', ReleaseCandidatesExtension)
+releaseCandidatesExtension.pruneSuperseded.convention(true)
+releaseCandidatesExtension.retain.convention(0)
 
 tasks.register('tagReleaseCandidate') {
     group = 'release'
@@ -83,8 +99,21 @@ tasks.register('tagReleaseCandidate') {
         // bookkeeping required anywhere.
         String candidate = forceVersion ?:
                 VersionResolver.resolveCandidateVersion(repoDir, tagPrefix, modulePath, ['v'], typeRules)
+        // Release candidates aren't permanent - a later commit can raise the bump mid-cycle and
+        // "leapfrog" straight past whatever the most recent RC's version was (e.g. v1.4.0-RC3
+        // followed by v1.4.1-RC1). Never blocks, just flags it - see releaseCandidates { } below
+        // for what tagReleaseCandidates (the plural aggregator) does about the superseded RC's
+        // GitHub Release once this happens.
+        List<String> currentCycleTags = VersionResolver.currentCycleReleaseCandidateTags(repoDir, tagPrefix, ['v'])
+        if (!currentCycleTags.isEmpty()) {
+            String previousVersion = currentCycleTags[0].substring(tagPrefix.length()).replaceAll(/-RC\d+$/, '')
+            if (previousVersion != candidate) {
+                logger.warn("tagReleaseCandidate: candidate jumped from ${tagPrefix}${previousVersion} to " +
+                        "${tagPrefix}${candidate} - new qualifying commits raised the bump since ${currentCycleTags[0]}")
+            }
+        }
         String tag = VersionResolver.nextReleaseCandidateTag(repoDir, tagPrefix, candidate)
-        createAndPushTag(repoDir, tag)
+        ReleaseGitOps.createAndPushTag(repoDir, tag)
     }
 }
 
@@ -102,7 +131,7 @@ tasks.register('promoteReleaseCandidate') {
         // already exists, already under this module's own tagPrefix. Intended to run on every push
         // to `main` once an accepted RC has been merged there from `release`.
         String tag = forceVersion ? "${tagPrefix}${forceVersion}" : VersionResolver.promoteTag(repoDir, tagPrefix)
-        createAndPushTag(repoDir, tag)
+        ReleaseGitOps.createAndPushTag(repoDir, tag)
     }
 }
 
@@ -118,7 +147,7 @@ tasks.register('changelogForReleaseCandidate') {
     def outputFile = project.layout.buildDirectory.file('changelog.md').get().asFile
     doLast {
         List<String> messages = VersionResolver.commitMessagesForChangelog(repoDir, tagPrefix, modulePath, ['v'], rcScope)
-        writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
+        ReleaseGitOps.writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
     }
 }
 
@@ -134,7 +163,7 @@ tasks.register('changelogForRelease') {
     doLast {
         List<String> messages = VersionResolver.commitMessagesForChangelog(
                 repoDir, tagPrefix, modulePath, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
-        writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
+        ReleaseGitOps.writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
     }
 }
 
@@ -184,13 +213,32 @@ if (rootProject.tasks.findByName('tagReleaseCandidates') == null) {
                         println "tagReleaseCandidates: skipping ${target.module} - no qualifying commits since ${tagPrefix}${lastFinal}"
                         return
                     }
+                    // Release candidates aren't permanent - a later commit can raise the bump
+                    // mid-cycle and "leapfrog" straight past whatever the most recent RC's version
+                    // was (e.g. v1.4.0-RC3 followed by v1.4.1-RC1). Never blocks, just flags it.
+                    List<String> currentCycleTags = VersionResolver.currentCycleReleaseCandidateTags(projectDir, tagPrefix, ['v'])
+                    if (!currentCycleTags.isEmpty()) {
+                        String previousVersion = currentCycleTags[0].substring(tagPrefix.length()).replaceAll(/-RC\d+$/, '')
+                        if (previousVersion != candidate) {
+                            logger.warn("tagReleaseCandidates: ${target.module} candidate jumped from ${tagPrefix}${previousVersion} " +
+                                    "to ${tagPrefix}${candidate} - new qualifying commits raised the bump since ${currentCycleTags[0]}")
+                        }
+                    }
                     List<String> messages = VersionResolver.commitMessagesForChangelog(
                             projectDir, tagPrefix, modulePath, ['v'], target.rcScope as ChangelogScope)
                     File changelogFile = target.changelogFile as File
-                    writeChangelog(changelogFile, ChangelogGenerator.generate(messages, typeRules))
+                    ReleaseGitOps.writeChangelog(changelogFile, ChangelogGenerator.generate(messages, typeRules))
                     String tag = VersionResolver.nextReleaseCandidateTag(projectDir, tagPrefix, candidate)
-                    createAndPushTag(projectDir, tag)
-                    manifest.add(target.module as String, tag, relativePath(rootDir, changelogFile))
+                    ReleaseGitOps.createAndPushTag(projectDir, tag)
+                    // Every current-cycle RC (regardless of which candidate version it was minted
+                    // under - see currentCycleReleaseCandidateTags) is superseded by the one just
+                    // tagged, except however many the releaseCandidates { } extension says to
+                    // retain. Only the GitHub Release gets deleted (by the CI workflow, from this
+                    // manifest entry) - the tag and its published package are left alone.
+                    boolean pruneSuperseded = target.pruneSuperseded as boolean
+                    int retain = target.retain as int
+                    List<String> supersededTags = pruneSuperseded ? currentCycleTags.drop(retain) : []
+                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile), supersededTags)
                 }
                 manifest.writeTo(manifestFile)
                 println "tagReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
@@ -231,9 +279,9 @@ if (rootProject.tasks.findByName('promoteReleaseCandidates') == null) {
                     List<String> messages = VersionResolver.commitMessagesForChangelog(
                             projectDir, tagPrefix, target.modulePath as String, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
                     File changelogFile = target.changelogFile as File
-                    writeChangelog(changelogFile, ChangelogGenerator.generate(messages, target.typeRules as Map))
-                    createAndPushTag(projectDir, tag)
-                    manifest.add(target.module as String, tag, relativePath(rootDir, changelogFile))
+                    ReleaseGitOps.writeChangelog(changelogFile, ChangelogGenerator.generate(messages, target.typeRules as Map))
+                    ReleaseGitOps.createAndPushTag(projectDir, tag)
+                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile))
                 }
                 manifest.writeTo(manifestFile)
                 println "promoteReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
@@ -364,6 +412,8 @@ static List<Map> releaseFlowTargets(Project root) {
                 typeRules   : p.extensions.getByType(CommitAnalyzerExtension).toTypeRules(),
                 rcScope     : p.extensions.getByType(ChangelogExtension).rcScope.get(),
                 changelogFile: p.layout.buildDirectory.file('changelog.md').get().asFile,
+                pruneSuperseded: p.extensions.getByType(ReleaseCandidatesExtension).pruneSuperseded.get(),
+                retain      : p.extensions.getByType(ReleaseCandidatesExtension).retain.get(),
         ]
     }
 }
@@ -376,38 +426,4 @@ static String loadWorkflowResource(String fileName) {
         throw new IllegalStateException("Missing bundled resource: ${path}")
     }
     stream.withStream { it.getText('UTF-8') }
-}
-
-/** Writes generated changelog Markdown to outputFile, creating parent directories as needed. */
-def writeChangelog(File outputFile, String changelog) {
-    outputFile.parentFile.mkdirs()
-    outputFile.text = changelog
-    println "Changelog written to ${outputFile}"
-}
-
-/** Creates an annotated tag at HEAD and pushes it to `origin` - the only state-mutating step here. */
-def createAndPushTag(File repoDir, String tag) {
-    runGit(repoDir, 'tag', '-a', tag, '-m', "Release ${tag}")
-    runGit(repoDir, 'push', 'origin', tag)
-}
-
-/** file's path relative to base, with forward slashes regardless of OS - for the JSON manifest. */
-static String relativePath(File base, File file) {
-    return base.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/' as char)
-}
-
-/**
- * Plain ProcessBuilder rather than project.exec (see file-level comment above for why) or
- * VersionResolver's JGit plumbing (pushing a tag needs real push credentials - the `git` CLI
- * transparently reuses whatever's already configured, both locally and via actions/checkout's
- * persisted GITHUB_TOKEN in CI, with no extra credential wiring needed here).
- */
-def runGit(File repoDir, String... args) {
-    List<String> command = ['git'] + (args as List<String>)
-    Process process = new ProcessBuilder(command).directory(repoDir).redirectErrorStream(true).start()
-    String output = process.inputStream.getText('UTF-8')
-    int exit = process.waitFor()
-    if (exit != 0) {
-        throw new RuntimeException("git ${args.join(' ')} failed (${exit}): ${output.trim()}")
-    }
 }

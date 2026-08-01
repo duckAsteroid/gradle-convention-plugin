@@ -1,23 +1,26 @@
+# duckasteroid-workflow-version: 1.2.0 sha256:e8f74c243b4bde6f6a9eeaef70b1a2262dcec468ab345a085f78b9330cf05833
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
-
-# Auto-bumps the release-candidate number on every push to `release`: tagReleaseCandidate derives
-# the candidate version from conventional commits since the last final release (or picks up
-# release.forceVersion if set), mints the next -RCn tag, and this job then cuts a GitHub
-# pre-release and publishes it - all in the same job.
 #
-# This repo dogfoods its own duckasteroid-java/duckasteroid-release-flow conventions (see
-# build.gradle/settings.gradle) by depending on them as a *published* GitHub Packages artifact,
-# same as any other consumer - not by applying the in-source precompiled script plugin to itself
-# (which really is circular/impossible; see CLAUDE.md). This workflow doubles as a human-readable
-# reference for what `./gradlew installReleaseWorkflows` installs into a consumer project's own
-# .github/workflows/ (identical apart from the pinned Java 21 toolchain below).
+# Installed by the duckasteroid-release-flow Gradle plugin's installReleaseWorkflows task
+# (https://github.com/duckAsteroid/gradle-convention-plugin). Re-run installReleaseWorkflows
+# after upgrading the plugin to pick up template changes; if you've edited this file locally and
+# want to discard those edits in favor of the new template, add -Pduckasteroid.workflows.force=true.
+
+# Auto-bumps the release-candidate number on every push to `release`: tagReleaseCandidates loops
+# every project in the build that applies duckasteroid-release-flow, tags/pushes the next RC (and
+# generates that project's own changelog) for each one with qualifying commits since its last
+# release, skips the rest, and writes build/release-manifest.json - one {module, tag, changelog}
+# entry per project actually released. This job then turns each manifest entry into its own GitHub
+# pre-release, all in the same job. Works the same whether the repo releases as a single module or
+# several independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
 #
 # Deliberately self-contained rather than relying on the tag push to trigger a separate publish
-# workflow: a tag pushed with the default GITHUB_TOKEN does not trigger other workflow runs.
-name: Tag and publish a release candidate
+# workflow: a tag pushed with the default GITHUB_TOKEN does not trigger other workflow runs, so
+# chaining into one here would silently never fire.
+name: Tag and publish release candidates
 on:
   push:
     branches:
@@ -26,21 +29,23 @@ jobs:
   release-candidate:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # needed to create the tag/GitHub Release
+      contents: write # needed to create the tag(s)/GitHub Release(s)
       packages: write # needed to publish to GitHub Packages (and read duckasteroid-* plugins)
     env:
       # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
       # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
-      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly. Manually restored here
+      # (not from the 1.2.0 template, which is missing it - see issue tracking that regression) -
+      # checkReleaseWorkflows will correctly flag this file as edited-since-install until a fixed
+      # version is published and re-installed.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full tag + commit history needed to derive the version
+          fetch-depth: 0 # full tag + commit history needed to derive versions
 
       - uses: actions/setup-java@v4
         with:
-          # 21: this project's own toolchain, set via gradle.properties' duckasteroid.java.version.
           java-version: '21'
           distribution: 'temurin'
 
@@ -50,29 +55,28 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # tagReleaseCandidate creates an annotated tag, which needs a committer identity - the
-      # runner has none configured by default.
+      # tagReleaseCandidates creates annotated tags, which need a committer identity - the runner
+      # has none configured by default.
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # Must run BEFORE tagging: it looks for the *previous* RC tag reachable from HEAD, which the
-      # about-to-be-created tag would otherwise shadow.
-      - name: Generate release-candidate notes
-        run: ./gradlew changelogForReleaseCandidate
+      - name: Tag next release candidates
+        run: ./gradlew tagReleaseCandidates
 
-      - name: Tag next release candidate
-        run: ./gradlew tagReleaseCandidate
-
-      - name: Determine tag
-        id: tag
-        run: echo "name=$(git describe --tags --exact-match HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub pre-release
+      # One GitHub pre-release per build/release-manifest.json entry. An empty manifest (no project
+      # had qualifying commits since its last release) means the loop below simply does nothing -
+      # not an error.
+      - name: Create GitHub pre-releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ steps.tag.outputs.name }}" --notes-file build/changelog.md --prerelease
+        run: |
+          jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
+            tag=$(jq -r '.tag' <<< "$entry")
+            changelog=$(jq -r '.changelog' <<< "$entry")
+            gh release create "$tag" --notes-file "$changelog" --prerelease
+          done
 
       - name: Publish package
         uses: gradle/gradle-build-action@v2

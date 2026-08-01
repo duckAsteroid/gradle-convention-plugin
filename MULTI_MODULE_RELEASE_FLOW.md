@@ -18,7 +18,9 @@ releasable - just the root, just a subset of subprojects, or every project. Each
 3. Skip any project whose candidate equals its last-final version - nothing under that project's own
    directory had a qualifying Conventional Commit since its last release, so there's nothing to tag.
 4. For every project that *does* have a qualifying change, generate its changelog, mint and push its
-   own tag, and record `{module, tag, changelog}` in a manifest file written once at the repo root.
+   own tag, and record `{module, tag, changelog, supersededTags}` in a manifest file written once at
+   the repo root - see "The manifest" and `releaseCandidates { }` (agent-docs SKILL.md) for what
+   `supersededTags` is.
 
 The bundled workflow reads that manifest and creates one GitHub Release per entry. A push touching one
 module produces one release; a push touching several produces several, each versioned independently; a
@@ -95,17 +97,23 @@ repo root (overwriting whatever the other one wrote last - only one of them runs
 
 ```json
 [
-  { "module": ":api", "tag": "api/v1.4.1-RC1", "changelog": "api/build/changelog.md" },
-  { "module": ":",    "tag": "v2.1.0-RC1",      "changelog": "build/changelog.md" }
+  { "module": ":api", "tag": "api/v1.4.1-RC1", "changelog": "api/build/changelog.md", "supersededTags": ["api/v1.4.0-RC3"] },
+  { "module": ":",    "tag": "v2.1.0-RC1",      "changelog": "build/changelog.md",     "supersededTags": [] }
 ]
 ```
 
 `module` is the Gradle project path (`:` for the root), `tag` is the full tag name including prefix,
-`changelog` is the path (relative to the repo root) to that project's own generated changelog. The
-bundled workflow's "Create GitHub Release" step loops over this file - one `gh release create` per
+`changelog` is the path (relative to the repo root) to that project's own generated changelog,
+`supersededTags` is that project's previous release-candidate tags (this cycle, regardless of which
+candidate version they were minted under) that `tag` replaces - see the `releaseCandidates { }`
+extension in the agent-docs SKILL.md, added for
+[issue #6](https://github.com/duckAsteroid/gradle-convention-plugin/issues/6). The bundled
+workflow's "Create GitHub pre-releases" step loops over this file - one `gh release create` per
 entry, each pointed at its own `--notes-file` - instead of inferring a single tag via
 `git describe --tags --exact-match HEAD`, which only ever worked when exactly one tag landed on a
-commit.
+commit; a separate "Delete superseded release-candidate pre-releases" step then runs one
+`gh release delete` per tag in each entry's `supersededTags` (never touching the tag itself or its
+already-published package).
 
 ## Registration: exactly once, regardless of application site
 

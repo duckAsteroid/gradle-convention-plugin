@@ -1,20 +1,24 @@
+# duckasteroid-workflow-version: 1.2.0 sha256:79c246e0014ed63f8578437aba30ae12afe6406dafcd6e1e7426ada22b5d7b17
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
-
-# Promotes an accepted release candidate to a final release on every push to `main`:
-# promoteReleaseCandidate strips the -RCn suffix off the nearest reachable RC tag (or picks up
-# release.forceVersion if set), mints the final tag, and this job then cuts the GitHub Release and
-# publishes it - all in the same job, for the same reason release-candidate.yml is self-contained
-# (a tag pushed with the default GITHUB_TOKEN doesn't trigger other workflow runs).
 #
-# This repo dogfoods its own duckasteroid-java/duckasteroid-release-flow conventions (see
-# build.gradle/settings.gradle) by depending on them as a *published* GitHub Packages artifact,
-# same as any other consumer. This workflow doubles as a human-readable reference for what
-# `./gradlew installReleaseWorkflows` installs into a consumer project's own .github/workflows/
-# (identical apart from the pinned Java 21 toolchain below).
-name: Promote release candidate to final release
+# Installed by the duckasteroid-release-flow Gradle plugin's installReleaseWorkflows task
+# (https://github.com/duckAsteroid/gradle-convention-plugin). Re-run installReleaseWorkflows
+# after upgrading the plugin to pick up template changes; if you've edited this file locally and
+# want to discard those edits in favor of the new template, add -Pduckasteroid.workflows.force=true.
+
+# Promotes every project's accepted release candidate to a final release on every push to `main`:
+# promoteReleaseCandidates loops every project in the build that applies duckasteroid-release-flow,
+# strips the -RCn suffix off each one's nearest reachable RC tag (generating that project's own
+# final-release changelog first), skips projects with no RC pending, and writes
+# build/release-manifest.json - one {module, tag, changelog} entry per project actually promoted.
+# This job then turns each manifest entry into its own GitHub Release, all in the same job, for the
+# same reason release-candidate.yml is self-contained (a tag pushed with the default GITHUB_TOKEN
+# doesn't trigger other workflow runs). Works the same whether the repo releases as a single module
+# or several independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
+name: Promote release candidates to final releases
 on:
   push:
     branches:
@@ -23,21 +27,23 @@ jobs:
   promote:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # needed to create the tag/GitHub Release
+      contents: write # needed to create the tag(s)/GitHub Release(s)
       packages: write # needed to publish to GitHub Packages (and read duckasteroid-* plugins)
     env:
       # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
       # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
-      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly. Manually restored here
+      # (not from the 1.2.0 template, which is missing it - see issue tracking that regression) -
+      # checkReleaseWorkflows will correctly flag this file as edited-since-install until a fixed
+      # version is published and re-installed.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full tag + commit history needed to find the RC tag to promote
+          fetch-depth: 0 # full tag + commit history needed to find the RC tag(s) to promote
 
       - uses: actions/setup-java@v4
         with:
-          # 21: this project's own toolchain, set via gradle.properties' duckasteroid.java.version.
           java-version: '21'
           distribution: 'temurin'
 
@@ -47,29 +53,27 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      # promoteReleaseCandidate creates an annotated tag, which needs a committer identity - the
+      # promoteReleaseCandidates creates annotated tags, which need a committer identity - the
       # runner has none configured by default.
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # Must run BEFORE promoting: it looks for the last reachable *final* release tag, which the
-      # about-to-be-created final tag would otherwise shadow (HEAD would already be sitting on it).
-      - name: Generate release notes
-        run: ./gradlew changelogForRelease
+      - name: Promote release candidates to final
+        run: ./gradlew promoteReleaseCandidates
 
-      - name: Promote release candidate to final
-        run: ./gradlew promoteReleaseCandidate
-
-      - name: Determine tag
-        id: tag
-        run: echo "name=$(git describe --tags --exact-match HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
+      # One GitHub Release per build/release-manifest.json entry. An empty manifest (no project had
+      # a pending RC to promote) means the loop below simply does nothing - not an error.
+      - name: Create GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ steps.tag.outputs.name }}" --notes-file build/changelog.md
+        run: |
+          jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
+            tag=$(jq -r '.tag' <<< "$entry")
+            changelog=$(jq -r '.changelog' <<< "$entry")
+            gh release create "$tag" --notes-file "$changelog"
+          done
 
       - name: Publish package
         uses: gradle/gradle-build-action@v2
