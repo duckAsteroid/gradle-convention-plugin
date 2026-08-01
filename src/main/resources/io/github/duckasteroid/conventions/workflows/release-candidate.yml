@@ -32,7 +32,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # needed to create the tag(s)/GitHub Release(s)
-      packages: write # needed to publish to GitHub Packages
+      packages: write # needed to publish to GitHub Packages (and read duckasteroid-* plugins)
+    env:
+      # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
+      # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -90,5 +95,3 @@ jobs:
         uses: gradle/gradle-build-action@v2
         with:
           arguments: publish
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
