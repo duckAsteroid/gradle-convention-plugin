@@ -42,10 +42,12 @@ apply the plugin.
   (`VersionResolver`, using that project's own `tagPrefix`/`modulePath`), skips any project whose
   candidate equals its last-final version (nothing qualifying changed under its own directory),
   and for every project that *does* qualify: generates its changelog, mints and pushes its own RC
-  tag, and records `{module, tag, changelog}` in `build/release-manifest.json` at the repo root.
-  A push touching one module produces one manifest entry; a push touching several produces
-  several, each versioned independently; a push with no qualifying commits anywhere produces an
-  empty manifest (not an error).
+  tag, and records `{module, tag, changelog, supersededTags}` in `build/release-manifest.json` at
+  the repo root. A push touching one module produces one manifest entry; a push touching several
+  produces several, each versioned independently; a push with no qualifying commits anywhere
+  produces an empty manifest (not an error). `supersededTags` — see `releaseCandidates { }` below
+  — lists this cycle's previous RC tags that the new one replaces, for the bundled workflow to
+  delete their GitHub Releases.
 - **`promoteReleaseCandidates`** — the `main`-push counterpart. Same enumeration, but promotes
   each applying project's nearest reachable RC tag to final; a project with no pending RC this
   cycle is skipped rather than failing the whole task.
@@ -116,6 +118,38 @@ changelog {
 `changelogForRelease` and `promoteReleaseCandidates` always use `SINCE_LAST_RELEASE`, regardless of
 this setting — a final release's notes should be the complete picture.
 
+## `releaseCandidates { }` extension
+
+Release candidates aren't permanent — only whichever one eventually gets promoted matters, and any
+earlier one in the same cycle is either absorbed into a later RC or simply abandoned. By default,
+`tagReleaseCandidates` deletes every previous RC's **GitHub Release** (never the git tag, never the
+already-published package — those stay put forever) as soon as a newer RC exists for that module,
+regardless of whether the candidate version itself changed along the way:
+
+```groovy
+releaseCandidates {
+    pruneSuperseded = false   // default: true — keep every RC's GitHub Release forever instead
+    retain = 2                // default: 0 — also keep the 2 most recent RCs besides the new one,
+                               // counted by recency, not by version
+}
+```
+
+- `pruneSuperseded = false` fully opts out — every RC's GitHub Release lives forever, matching the
+  plugin's pre-#6 behavior.
+- `retain` counts backward from the brand-new RC by recency, ignoring version boundaries: if a
+  qualifying commit raises the bump mid-cycle (e.g. `v1.4.0-RC3` followed by `v1.4.1-RC1` — a
+  "leapfrog"), `v1.4.0-RC3` still counts toward `retain` even though its base version differs from
+  the new one.
+- **Leapfrog warning**: whenever the freshly computed candidate's version differs from the nearest
+  current-cycle RC's version, both `tagReleaseCandidate` and `tagReleaseCandidates` print a stderr
+  warning — purely informational, never blocks, same philosophy as `CommitAnalyzer`'s
+  non-conforming-commit warning.
+- `tagReleaseCandidate` (singular) only prints the leapfrog warning — pruning is a manifest/
+  GitHub-Release concern, and the singular task has no GitHub integration point of its own.
+- `promoteReleaseCandidate(s)` never prunes anything — by the time a promotion happens there's only
+  ever one live RC for that module (each new RC already superseded the one before it), so there's
+  nothing left to clean up.
+
 ## Typical CI wiring
 
 Run `./gradlew installReleaseWorkflows` once (locally, or as a one-off task) to install the two
@@ -124,7 +158,8 @@ template changes.
 
 - On push to `release`: `tagReleaseCandidates` (generates each qualifying project's changelog and
   mints its RC tag internally, no separate changelog step needed first), then one GitHub
-  pre-release per `build/release-manifest.json` entry, then `publish`.
+  pre-release per `build/release-manifest.json` entry, then one `gh release delete` per tag in
+  each entry's `supersededTags` (see `releaseCandidates { }` above), then `publish`.
 - On push to `main`: `promoteReleaseCandidates` (same internal changelog generation), then one
   GitHub release per manifest entry, then `publish`.
 

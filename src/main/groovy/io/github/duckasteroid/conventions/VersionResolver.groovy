@@ -167,6 +167,51 @@ class VersionResolver {
     }
 
     /**
+     * Every release-candidate tag (tagPrefix + "X.Y.Z-RCn") reachable from HEAD but not reachable
+     * from the last final release tag's commit - i.e. every RC minted during the current release
+     * cycle, regardless of which candidate version it was minted under (a later commit can raise
+     * the bump mid-cycle, "leapfrogging" an earlier RC's version - both still belong to the same
+     * cycle). Ordered nearest-to-HEAD first (most recently created). Used by
+     * duckasteroid-release-flow.gradle's tagReleaseCandidates to warn when the freshly computed
+     * candidate leapfrogs the most recent RC's version, and to decide which of this cycle's RC
+     * GitHub Releases are superseded and safe to prune.
+     */
+    static List<String> currentCycleReleaseCandidateTags(File repoDir, String tagPrefix, List<String> fallbackPrefixes = []) {
+        return withRepo(repoDir) { Repository repo ->
+            Tuple2<String, String> lookup = lastFinalVersionLookup(repo, tagPrefix, fallbackPrefixes)
+            ObjectId sinceCommit = commitForTag(repo, "${lookup.v1}${lookup.v2}")
+            Map<String, String> tagByCommit = [:]
+            allTagRefs(repo).each { Ref tagRef ->
+                String name = shortName(tagRef)
+                if (name.startsWith(tagPrefix) && RC_VERSION_SUFFIX.matcher(name.substring(tagPrefix.length())).matches()) {
+                    tagByCommit[peeledCommitId(repo, tagRef).name] = name
+                }
+            }
+            ObjectId headId = repo.resolve('HEAD')
+            if (headId == null || tagByCommit.isEmpty()) {
+                return []
+            }
+            List<String> result = []
+            RevWalk walk = new RevWalk(repo)
+            try {
+                walk.markStart(walk.parseCommit(headId))
+                if (sinceCommit != null) {
+                    walk.markUninteresting(walk.parseCommit(sinceCommit))
+                }
+                for (RevCommit commit : walk) {
+                    String tag = tagByCommit[commit.id.name]
+                    if (tag != null) {
+                        result << tag
+                    }
+                }
+            } finally {
+                walk.dispose()
+            }
+            return result
+        }
+    }
+
+    /**
      * Full commit messages to build a changelog from, for {@link ChangelogGenerator}. The "since"
      * boundary depends on scope:
      *

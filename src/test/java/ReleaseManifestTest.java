@@ -6,6 +6,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -40,6 +41,29 @@ public class ReleaseManifestTest {
     assertTrue(json.indexOf("\"tag\"") < json.indexOf("\"changelog\""), "tag key should come before changelog key");
     assertTrue(json.contains("\"api/v1.4.1-RC1\""));
     assertTrue(json.contains("\"api/build/changelog.md\""));
+  }
+
+  @Test
+  void addWithoutSupersededTagsDefaultsToAnEmptyArray() {
+    ReleaseManifest manifest = new ReleaseManifest();
+    manifest.add(":", "v1.0.1-RC1", "build/changelog.md");
+
+    String json = manifest.toJson();
+    assertTrue(json.contains("\"supersededTags\""), "supersededTags key should always be present");
+    assertTrue(
+        json.indexOf("\"changelog\"") < json.indexOf("\"supersededTags\""),
+        "supersededTags key should come after changelog");
+    // An empty array, not a missing/null key - the workflow's jq loop can iterate it unconditionally.
+    assertTrue(json.replaceAll("\\s+", "").contains("\"supersededTags\":[]"));
+  }
+
+  @Test
+  void addWithSupersededTagsSerializesThemAsAnArray() {
+    ReleaseManifest manifest = new ReleaseManifest();
+    manifest.add(":", "v1.0.1-RC1", "build/changelog.md", List.of("v1.0.1-RC1-old", "v1.0.0-RC3"));
+
+    String json = manifest.toJson().replaceAll("\\s+", "");
+    assertTrue(json.contains("\"supersededTags\":[\"v1.0.1-RC1-old\",\"v1.0.0-RC3\"]"));
   }
 
   @Test

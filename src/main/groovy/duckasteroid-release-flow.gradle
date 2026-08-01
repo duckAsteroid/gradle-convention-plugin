@@ -4,6 +4,7 @@ import io.github.duckasteroid.conventions.ChangelogExtension
 import io.github.duckasteroid.conventions.ChangelogGenerator
 import io.github.duckasteroid.conventions.ChangelogScope
 import io.github.duckasteroid.conventions.CommitAnalyzerExtension
+import io.github.duckasteroid.conventions.ReleaseCandidatesExtension
 import io.github.duckasteroid.conventions.ReleaseGitOps
 import io.github.duckasteroid.conventions.ReleaseManifest
 import io.github.duckasteroid.conventions.VersionResolver
@@ -59,9 +60,23 @@ import io.github.duckasteroid.conventions.WorkflowInstaller
 // which would incorrectly find the *new* RC tag instead if that tag already existed by the time it
 // ran). The plural aggregator tasks generate each project's changelog internally, in the same order,
 // as part of their own doLast - a CI job calling them doesn't need a separate changelog step first.
+//
+// releaseCandidates { } (see the extension below and VERSIONING.md's "Pruning superseded release
+// candidates") controls what tagReleaseCandidate(s) does once a new RC exists for a module: release
+// candidates aren't permanent, so by default every previous RC's GitHub Release (never its tag or
+// published package) is deleted, regardless of whether the candidate version itself changed
+// mid-cycle. tagReleaseCandidates records what got superseded per module in each
+// build/release-manifest.json entry's supersededTags field for the CI workflow to act on;
+// tagReleaseCandidate (singular) only prints the leapfrog warning below, since it has no GitHub
+// integration point of its own to prune anything through. promoteReleaseCandidate(s) never prunes -
+// by the time a promotion happens there's only ever one live RC for that module left to promote.
 
 def changelogExtension = project.extensions.create('changelog', ChangelogExtension)
 changelogExtension.rcScope.convention(ChangelogScope.SINCE_LAST_RELEASE)
+
+def releaseCandidatesExtension = project.extensions.create('releaseCandidates', ReleaseCandidatesExtension)
+releaseCandidatesExtension.pruneSuperseded.convention(true)
+releaseCandidatesExtension.retain.convention(0)
 
 tasks.register('tagReleaseCandidate') {
     group = 'release'
@@ -84,6 +99,19 @@ tasks.register('tagReleaseCandidate') {
         // bookkeeping required anywhere.
         String candidate = forceVersion ?:
                 VersionResolver.resolveCandidateVersion(repoDir, tagPrefix, modulePath, ['v'], typeRules)
+        // Release candidates aren't permanent - a later commit can raise the bump mid-cycle and
+        // "leapfrog" straight past whatever the most recent RC's version was (e.g. v1.4.0-RC3
+        // followed by v1.4.1-RC1). Never blocks, just flags it - see releaseCandidates { } below
+        // for what tagReleaseCandidates (the plural aggregator) does about the superseded RC's
+        // GitHub Release once this happens.
+        List<String> currentCycleTags = VersionResolver.currentCycleReleaseCandidateTags(repoDir, tagPrefix, ['v'])
+        if (!currentCycleTags.isEmpty()) {
+            String previousVersion = currentCycleTags[0].substring(tagPrefix.length()).replaceAll(/-RC\d+$/, '')
+            if (previousVersion != candidate) {
+                logger.warn("tagReleaseCandidate: candidate jumped from ${tagPrefix}${previousVersion} to " +
+                        "${tagPrefix}${candidate} - new qualifying commits raised the bump since ${currentCycleTags[0]}")
+            }
+        }
         String tag = VersionResolver.nextReleaseCandidateTag(repoDir, tagPrefix, candidate)
         ReleaseGitOps.createAndPushTag(repoDir, tag)
     }
@@ -185,13 +213,32 @@ if (rootProject.tasks.findByName('tagReleaseCandidates') == null) {
                         println "tagReleaseCandidates: skipping ${target.module} - no qualifying commits since ${tagPrefix}${lastFinal}"
                         return
                     }
+                    // Release candidates aren't permanent - a later commit can raise the bump
+                    // mid-cycle and "leapfrog" straight past whatever the most recent RC's version
+                    // was (e.g. v1.4.0-RC3 followed by v1.4.1-RC1). Never blocks, just flags it.
+                    List<String> currentCycleTags = VersionResolver.currentCycleReleaseCandidateTags(projectDir, tagPrefix, ['v'])
+                    if (!currentCycleTags.isEmpty()) {
+                        String previousVersion = currentCycleTags[0].substring(tagPrefix.length()).replaceAll(/-RC\d+$/, '')
+                        if (previousVersion != candidate) {
+                            logger.warn("tagReleaseCandidates: ${target.module} candidate jumped from ${tagPrefix}${previousVersion} " +
+                                    "to ${tagPrefix}${candidate} - new qualifying commits raised the bump since ${currentCycleTags[0]}")
+                        }
+                    }
                     List<String> messages = VersionResolver.commitMessagesForChangelog(
                             projectDir, tagPrefix, modulePath, ['v'], target.rcScope as ChangelogScope)
                     File changelogFile = target.changelogFile as File
                     ReleaseGitOps.writeChangelog(changelogFile, ChangelogGenerator.generate(messages, typeRules))
                     String tag = VersionResolver.nextReleaseCandidateTag(projectDir, tagPrefix, candidate)
                     ReleaseGitOps.createAndPushTag(projectDir, tag)
-                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile))
+                    // Every current-cycle RC (regardless of which candidate version it was minted
+                    // under - see currentCycleReleaseCandidateTags) is superseded by the one just
+                    // tagged, except however many the releaseCandidates { } extension says to
+                    // retain. Only the GitHub Release gets deleted (by the CI workflow, from this
+                    // manifest entry) - the tag and its published package are left alone.
+                    boolean pruneSuperseded = target.pruneSuperseded as boolean
+                    int retain = target.retain as int
+                    List<String> supersededTags = pruneSuperseded ? currentCycleTags.drop(retain) : []
+                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile), supersededTags)
                 }
                 manifest.writeTo(manifestFile)
                 println "tagReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
@@ -365,6 +412,8 @@ static List<Map> releaseFlowTargets(Project root) {
                 typeRules   : p.extensions.getByType(CommitAnalyzerExtension).toTypeRules(),
                 rcScope     : p.extensions.getByType(ChangelogExtension).rcScope.get(),
                 changelogFile: p.layout.buildDirectory.file('changelog.md').get().asFile,
+                pruneSuperseded: p.extensions.getByType(ReleaseCandidatesExtension).pruneSuperseded.get(),
+                retain      : p.extensions.getByType(ReleaseCandidatesExtension).retain.get(),
         ]
     }
 }
