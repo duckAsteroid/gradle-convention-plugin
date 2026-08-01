@@ -282,6 +282,62 @@ public class VersionResolverTest {
     assertTrue(messages.get(0).contains("the first RC's only commit"));
   }
 
+  // ---- currentCycleReleaseCandidateTags ----
+
+  @Test
+  void currentCycleReleaseCandidateTagsEmptyWhenNoneExist() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("feat: add a thing");
+    assertEquals(List.of(), VersionResolver.currentCycleReleaseCandidateTags(repo, PREFIX));
+  }
+
+  @Test
+  void currentCycleReleaseCandidateTagsOrderedNearestToHeadFirst() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("feat: add a thing");
+    tag("v1.1.0-RC1");
+    commit("fix: a follow-up fix");
+    tag("v1.1.0-RC2");
+    commit("fix: another follow-up");
+    tag("v1.1.0-RC3");
+
+    assertEquals(
+        List.of("v1.1.0-RC3", "v1.1.0-RC2", "v1.1.0-RC1"),
+        VersionResolver.currentCycleReleaseCandidateTags(repo, PREFIX));
+  }
+
+  @Test
+  void currentCycleReleaseCandidateTagsIncludesLeapfroggedVersions() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("fix: a patch");
+    tag("v1.0.1-RC1");
+    commit("feat: a feature lands mid-cycle");
+    tag("v1.1.0-RC1");
+
+    // Both belong to the same cycle (since v1.0.0) even though their base versions differ - a
+    // later commit raised the bump, "leapfrogging" v1.0.1-RC1's version.
+    assertEquals(
+        List.of("v1.1.0-RC1", "v1.0.1-RC1"),
+        VersionResolver.currentCycleReleaseCandidateTags(repo, PREFIX));
+  }
+
+  @Test
+  void currentCycleReleaseCandidateTagsExcludesTagsFromAnAlreadyFinalizedCycle() throws Exception {
+    commit("chore: init");
+    tag("v1.0.0");
+    commit("feat: add a thing");
+    tag("v1.1.0-RC1");
+    tag("v1.1.0"); // promoted - v1.1.0-RC1 now belongs to a finalized, previous cycle
+    commit("fix: next cycle's first fix");
+    tag("v1.1.1-RC1");
+
+    assertEquals(
+        List.of("v1.1.1-RC1"), VersionResolver.currentCycleReleaseCandidateTags(repo, PREFIX));
+  }
+
   @Test
   void changelogRespectsFallbackPrefixesForANewModule() throws Exception {
     commit("chore: init");
