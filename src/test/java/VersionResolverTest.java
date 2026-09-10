@@ -185,6 +185,49 @@ public class VersionResolverTest {
   }
 
   @Test
+  void candidateVersionExcludesCommitsUnderExcludedModulePaths() throws Exception {
+    commitFile("root.txt", "init", "chore: init");
+    tag("v1.0.0");
+    commitFile("api/file.txt", "a", "fix: bug in api");
+
+    // Root's unrestricted modulePath ("") would normally see this commit too (see issue #8) -
+    // excluding "api" should keep root at 1.0.0 since the only qualifying commit is entirely
+    // under the excluded path.
+    assertEquals(
+        "1.0.0",
+        VersionResolver.resolveCandidateVersion(
+            repo, PREFIX, "", List.of(), CommitAnalyzer.DEFAULT_TYPE_RULES, List.of("api")));
+    // Without the exclusion, root still sees it - existing behavior, unchanged.
+    assertEquals("1.0.1", VersionResolver.resolveCandidateVersion(repo, PREFIX, "", List.of()));
+  }
+
+  @Test
+  void candidateVersionExclusionDoesNotSuppressCommitsOutsideTheExcludedPath() throws Exception {
+    commitFile("root.txt", "init", "chore: init");
+    tag("v1.0.0");
+    commitFile("root2.txt", "change", "fix: root-level fix");
+
+    assertEquals(
+        "1.0.1",
+        VersionResolver.resolveCandidateVersion(
+            repo, PREFIX, "", List.of(), CommitAnalyzer.DEFAULT_TYPE_RULES, List.of("api")));
+  }
+
+  @Test
+  void changelogForRootExcludesCommitsUnderExcludedModulePaths() throws Exception {
+    commitFile("root.txt", "init", "chore: init");
+    tag("v1.0.0");
+    commitFile("api/file.txt", "a", "fix: bug in api");
+    commitFile("root2.txt", "b", "fix: root-level fix");
+
+    List<String> messages =
+        VersionResolver.commitMessagesForChangelog(
+            repo, PREFIX, "", List.of(), ChangelogScope.SINCE_LAST_RELEASE, List.of("api"));
+    assertEquals(1, messages.size());
+    assertTrue(messages.get(0).contains("root-level fix"));
+  }
+
+  @Test
   void resolveCandidateVersionUsesCustomMajorTypes() throws Exception {
     commit("chore: init");
     tag("v1.0.0");

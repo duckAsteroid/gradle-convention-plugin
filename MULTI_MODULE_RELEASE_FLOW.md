@@ -56,24 +56,31 @@ ones need their own release cadence. Three shapes fall out of the same mechanism
 
 Worked example: root tagged `v2.0.0`, `:api` (also applying `duckasteroid-release-flow`) tagged
 `api/v1.4.0`, `:web` not independently versioned. A push to `release` containing a single `fix:` commit
-touching only `:api/` produces a manifest with **two** entries: `:api` at `api/v1.4.1-RC1` (its own
-`fix:` commit), and root at `v2.0.1-RC1` (root's `modulePath` is always empty, so it sees that same
-`api/`-scoped commit too and bumps alongside it).
+touching only `:api/` produces exactly **one** manifest entry: `:api` at `api/v1.4.1-RC1`. Root does
+*not* also bump, because `tagReleaseCandidates`/`promoteReleaseCandidates` exclude every other applying
+project's `modulePath` from each target's own commit scope (see
+[issue #8](https://github.com/duckAsteroid/gradle-convention-plugin/issues/8)) - root's otherwise
+unrestricted `modulePath` (`""`) excludes `"api"`, so a commit entirely under `:api/` no longer counts
+towards root's own version. A commit that touches both `:api/` and something at the root level still
+bumps *both* - the exclusion only drops a target whose changes are entirely inside a sibling's
+directory, not a target that happens to share a commit with one.
 
-> **Known limitation: root's scope isn't exclusive of independently-versioned subprojects**
-> ([issue #8](https://github.com/duckAsteroid/gradle-convention-plugin/issues/8)). Because
-> root's `modulePath` is unrestricted (unchanged from how it already behaves for ordinary builds - see
-> [VERSIONING.md](VERSIONING.md)'s "Multi-module repositories" section), it sees every commit in the
-> repo, including ones under a subproject that has its *own* `duckasteroid-release-flow` application.
-> In mixed mode this means root will be tagged on essentially every push that bumps *any* opted-in
-> subproject too, not just changes outside those subprojects - "root covers everything not separately
-> versioned" is the intent, but isn't what the path-scoping mechanism actually produces today. Making
-> root's scope exclude opted-in subprojects' paths would need `modulePath` to support exclusions, not
-> just a single inclusive path - not yet designed. Until then, mixed mode is really "root releases on
-> every qualifying push regardless of which module contains it, plus independently versioned
-> subprojects also release on their own." Fully independent modules or a single global version (the
-> other two shapes above) don't have this problem, since only one thing is ever computing a version
-> for any given commit.
+The exclusion list for each target is derived automatically from every *other* project currently
+applying `duckasteroid-release-flow` (`releaseFlowTargets(rootProject)`, the same enumeration the
+aggregator tasks already use to decide what to loop over) - nothing needs configuring by hand, and it
+stays correct as subprojects opt in or out of independent versioning over time. Fully independent
+modules and a single global version (the other two shapes above) are unaffected either way, since only
+one thing is ever computing a version for any given commit in those shapes.
+
+> **Scope of this fix:** only `tagReleaseCandidates`/`promoteReleaseCandidates` (and the changelogs
+> they generate) get the exclusion above. An ordinary build's `project.version` for the root project,
+> and the singular `tagReleaseCandidate`/`promoteReleaseCandidate`/`changelogForReleaseCandidate`/
+> `changelogForRelease` tasks (documented as being for single-module use - see the task reference
+> below), still use root's unrestricted `modulePath` exactly as before. `VersionResolver` itself
+> gained a generic `excludedModulePaths` parameter usable from either place, but wiring it into
+> ordinary-build version resolution would require `duckasteroid-java` to know which sibling projects
+> apply `duckasteroid-release-flow` - a bigger, cross-plugin change not undertaken here since the
+> demonstrated bug was specifically in the aggregator tasks CI actually calls.
 
 ## Skipping unaffected modules
 
