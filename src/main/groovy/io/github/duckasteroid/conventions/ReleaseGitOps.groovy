@@ -34,13 +34,26 @@ class ReleaseGitOps {
     }
 
     /**
+     * The current branch name (e.g. "release"), for explainVersion(s)' buildVersion computation
+     * (see {@link VersionResolver#resolveBuildVersion}'s branchName parameter) - deliberately a
+     * plain `git` CLI call rather than JGit's own {@code Repository.getBranch()}, since this only
+     * ever runs from a doLast block (task execution time), where an external process is fine, and
+     * reusing {@link #runGit} here means there's exactly one place that shells out to git in this
+     * class.
+     */
+    static String currentBranch(File repoDir) {
+        return runGit(repoDir, 'rev-parse', '--abbrev-ref', 'HEAD').trim()
+    }
+
+    /**
      * Plain ProcessBuilder rather than project.exec (unsupported under the configuration cache from
      * a task action at execution time) or VersionResolver's JGit plumbing (pushing a tag needs real
      * push credentials - the `git` CLI transparently reuses whatever's already configured, both
      * locally and via actions/checkout's persisted GITHUB_TOKEN in CI, with no extra credential
-     * wiring needed here).
+     * wiring needed here). Returns stdout+stderr (merged) so callers that need the output (e.g.
+     * {@link #currentBranch}) don't need their own ProcessBuilder plumbing.
      */
-    static void runGit(File repoDir, String... args) {
+    static String runGit(File repoDir, String... args) {
         List<String> command = ['git'] + (args as List<String>)
         Process process = new ProcessBuilder(command).directory(repoDir).redirectErrorStream(true).start()
         String output = process.inputStream.getText('UTF-8')
@@ -48,5 +61,6 @@ class ReleaseGitOps {
         if (exit != 0) {
             throw new RuntimeException("git ${args.join(' ')} failed (${exit}): ${output.trim()}")
         }
+        return output
     }
 }
