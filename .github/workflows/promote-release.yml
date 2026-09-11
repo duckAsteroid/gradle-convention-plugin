@@ -1,4 +1,4 @@
-# duckasteroid-workflow-version: 1.2.0 sha256:79c246e0014ed63f8578437aba30ae12afe6406dafcd6e1e7426ada22b5d7b17
+# duckasteroid-workflow-version: 1.4.0 sha256:ccc082b4e49914aa1e4a13a958a202255e164e0fd924feee81765fcae06b189d
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
@@ -13,11 +13,13 @@
 # promoteReleaseCandidates loops every project in the build that applies duckasteroid-release-flow,
 # strips the -RCn suffix off each one's nearest reachable RC tag (generating that project's own
 # final-release changelog first), skips projects with no RC pending, and writes
-# build/release-manifest.json - one {module, tag, changelog} entry per project actually promoted.
-# This job then turns each manifest entry into its own GitHub Release, all in the same job, for the
-# same reason release-candidate.yml is self-contained (a tag pushed with the default GITHUB_TOKEN
-# doesn't trigger other workflow runs). Works the same whether the repo releases as a single module
-# or several independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
+# build/release-manifest.json - one {module, tag, changelog, artifactsDir} entry per project actually
+# promoted. This job then turns each manifest entry into its own GitHub Release, attaching whatever
+# jars sit in artifactsDir at that point (built fresh after tagging - see "Build release artifacts"
+# below), all in the same job, for the same reason release-candidate.yml is self-contained (a tag
+# pushed with the default GITHUB_TOKEN doesn't trigger other workflow runs). Works the same whether
+# the repo releases as a single module or several independently-versioned ones - see
+# MULTI_MODULE_RELEASE_FLOW.md.
 name: Promote release candidates to final releases
 on:
   push:
@@ -32,10 +34,7 @@ jobs:
     env:
       # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
       # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
-      # the default Actions env, GITHUB_TOKEN has to be exported explicitly. Manually restored here
-      # (not from the 1.2.0 template, which is missing it - see issue tracking that regression) -
-      # checkReleaseWorkflows will correctly flag this file as edited-since-install until a fixed
-      # version is published and re-installed.
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -63,8 +62,15 @@ jobs:
       - name: Promote release candidates to final
         run: ./gradlew promoteReleaseCandidates
 
-      # One GitHub Release per build/release-manifest.json entry. An empty manifest (no project had
-      # a pending RC to promote) means the loop below simply does nothing - not an error.
+      # Runs in a fresh ./gradlew invocation, after tagging - see the matching step/comment in
+      # release-candidate.yml for why this can't just reuse whatever tagReleaseCandidates already
+      # had lying around in build/libs.
+      - name: Build release artifacts
+        run: ./gradlew assemble
+
+      # One GitHub Release per build/release-manifest.json entry, with every jar found directly under
+      # that entry's artifactsDir attached as a release asset. An empty manifest (no project had a
+      # pending RC to promote) means the loop below simply does nothing - not an error.
       - name: Create GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -72,7 +78,12 @@ jobs:
           jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
             tag=$(jq -r '.tag' <<< "$entry")
             changelog=$(jq -r '.changelog' <<< "$entry")
-            gh release create "$tag" --notes-file "$changelog"
+            artifactsDir=$(jq -r '.artifactsDir' <<< "$entry")
+            assets=()
+            if [ -n "$artifactsDir" ] && [ -d "$artifactsDir" ]; then
+              while IFS= read -r -d '' f; do assets+=("$f"); done < <(find "$artifactsDir" -maxdepth 1 -type f -name '*.jar' -print0)
+            fi
+            gh release create "$tag" --notes-file "$changelog" "${assets[@]}"
           done
 
       - name: Publish package
