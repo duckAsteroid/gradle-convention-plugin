@@ -14,11 +14,15 @@ import io.github.duckasteroid.conventions.WorkflowChecker
 import io.github.duckasteroid.conventions.WorkflowInstaller
 
 // Opt-in release-engineering tasks for the develop -> release -> main flow described in
-// VERSIONING.md at the repo root. Apply alongside duckasteroid-java, which computes
-// project.ext.tagPrefix / project.ext.modulePath that these tasks reuse rather than recomputing.
+// VERSIONING.md at the repo root. Apply alongside duckasteroid-version, which computes
+// project.ext.tagPrefix / project.ext.modulePath that these tasks reuse rather than recomputing -
+// duckasteroid-java applies duckasteroid-version internally, so applying duckasteroid-java also
+// satisfies this. installReleaseWorkflows is the one task with a real, separate java-toolchain
+// dependency of its own (see its own comment further down) - every other task here only needs
+// duckasteroid-version.
 //
 // Ten tasks total. tagReleaseCandidate/promoteReleaseCandidate are the release-time counterpart
-// to duckasteroid-java's ordinary-build version resolution (they don't just *compute* a version,
+// to duckasteroid-version's ordinary-build version resolution (they don't just *compute* a version,
 // they actually create and push a tag for it) for the applying project alone - handy for local,
 // single-module work. tagReleaseCandidates/promoteReleaseCandidates (plural - see below) are what
 // CI actually calls: they loop every project in the build that applies duckasteroid-release-flow,
@@ -36,9 +40,9 @@ import io.github.duckasteroid.conventions.WorkflowInstaller
 // itself, so they're not literally produced by that task here.
 //
 // tagReleaseCandidate/promoteReleaseCandidate respect release.forceVersion as the ultimate backstop,
-// same as the ordinary build version resolution in duckasteroid-java: if set, it's used verbatim, no
-// commit analysis runs at all. This check is deliberately repeated here rather than shared with
-// duckasteroid-java.gradle, so the backstop can never be silently bypassed by one call site
+// same as the ordinary build version resolution in duckasteroid-version: if set, it's used verbatim,
+// no commit analysis runs at all. This check is deliberately repeated here rather than shared with
+// duckasteroid-version.gradle, so the backstop can never be silently bypassed by one call site
 // forgetting to check it. See
 // https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/
 // (The changelog tasks have no forceVersion equivalent - release notes are generated from whatever
@@ -414,7 +418,9 @@ if (rootProject.tasks.findByName('explainVersions') == null) {
 // same files several times over. The Java toolchain substituted into the template comes from
 // whichever project's script wins the guard (normally root, if root applies duckasteroid-java) -
 // see MULTI_MODULE_RELEASE_FLOW.md's "Installing the workflows" section for the current limitation
-// this implies if applying projects use differing toolchain versions.
+// this implies if applying projects use differing toolchain versions. This is the one place in this
+// file that genuinely needs a java-toolchain-configuring plugin present (JavaPluginExtension,
+// below) - every other task here only needs duckasteroid-version, not duckasteroid-java specifically.
 //
 // WorkflowInstaller/WorkflowChecker (plain Groovy classes, no Gradle dependency, unit-tested
 // directly) do the actual marker/hash comparison - see WorkflowMarker's doc comment for the
@@ -423,7 +429,15 @@ if (rootProject.tasks.findByName('explainVersions') == null) {
 // config-cache-safe pattern as the rest of this file: doLast blocks below never touch `project`.
 if (rootProject.tasks.findByName('installReleaseWorkflows') == null) {
     def workflowsDir = new File(rootProject.projectDir, '.github/workflows')
-    def javaVersion = project.extensions.getByType(JavaPluginExtension).toolchain.languageVersion.get().toString()
+    // findByType, not getByType: duckasteroid-release-flow itself must stay applicable with only
+    // duckasteroid-version present (see the file-level comment above) - a project with no
+    // java-toolchain-configuring plugin at all simply has no JavaPluginExtension to read, and that
+    // must not crash *applying the plugin*. javaVersion ends up null in that case; the actual
+    // failure (a clear, deliberate one, not a mystifying UnknownDomainObjectException) is deferred
+    // to installReleaseWorkflows' own doLast, below - the one task that genuinely can't proceed
+    // without it.
+    def javaToolchain = project.extensions.findByType(JavaPluginExtension)
+    def javaVersion = javaToolchain?.toolchain?.languageVersion?.get()?.toString()
     def force = rootProject.hasProperty('duckasteroid.workflows.force')
     def pluginVersion = loadWorkflowResource('workflow-version.txt').trim()
     def templates = [
@@ -437,6 +451,12 @@ if (rootProject.tasks.findByName('installReleaseWorkflows') == null) {
                 '(use -Pduckasteroid.workflows.force=true to override). Registered once on the root project ' +
                 'regardless of which project(s) apply duckasteroid-release-flow.'
         doLast {
+            if (javaVersion == null) {
+                throw new GradleException('installReleaseWorkflows needs a java-toolchain-configuring plugin ' +
+                        '(e.g. duckasteroid-java) applied somewhere in this build, to know what Java version to ' +
+                        'put in the installed workflows\' setup-java step - duckasteroid-version alone is not ' +
+                        'enough for this one task.')
+            }
             templates.each { fileName, template ->
                 String body = template.replace('@@JAVA_VERSION@@', javaVersion)
                 File target = new File(workflowsDir, fileName)

@@ -1,5 +1,5 @@
 ---
-description: Opt-in duckAsteroid Gradle release-engineering plugin implementing a develop/release/main git flow, with RC tagging, final-release promotion, changelog generation, multi-module-aware aggregator tasks, and GitHub Actions workflow install/staleness-check tasks. Apply alongside duckasteroid-java, whose VersionResolver it reuses.
+description: Opt-in duckAsteroid Gradle release-engineering plugin implementing a develop/release/main git flow, with RC tagging, final-release promotion, changelog generation, multi-module-aware aggregator tasks, and GitHub Actions workflow install/staleness-check tasks. Apply alongside duckasteroid-version (or duckasteroid-java, which applies it internally), whose VersionResolver it reuses.
 ---
 
 # duckasteroid-release-flow
@@ -9,12 +9,29 @@ accumulates release-candidate builds before an accepted RC is promoted to a fina
 `main`. Works the same whether the repo releases as a single unit or as several
 independently-versioned modules.
 
+Depends on `duckasteroid-version` (for `project.ext.tagPrefix`/`modulePath` and the
+`commitAnalyzer { }` extension), not `duckasteroid-java` specifically — `duckasteroid-java` applies
+`duckasteroid-version` internally, so either works:
+
 ```groovy
 plugins {
-    id 'duckasteroid-java' version '<version>'          // required first
+    id 'duckasteroid-java' version '<version>'          // applies duckasteroid-version internally
     id 'duckasteroid-release-flow' version '<version>'
 }
 ```
+
+```groovy
+plugins {
+    id 'duckasteroid-version' version '<version>'       // no Java/POM/publishing conventions needed
+    id 'duckasteroid-release-flow' version '<version>'
+}
+```
+
+The one remaining catch with the second form: `installReleaseWorkflows` still reads the applying
+project's `JavaPluginExtension` toolchain version to template into the installed workflow's
+`setup-java` step, so it needs *some* `java`-toolchain-configuring plugin present (every other task —
+`tagReleaseCandidate(s)`, `promoteReleaseCandidate(s)`, `changelogFor*`, `explainVersion(s)`,
+`checkReleaseWorkflows` — works with just `duckasteroid-version`).
 
 ## Tasks
 

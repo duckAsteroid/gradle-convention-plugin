@@ -78,7 +78,7 @@ one thing is ever computing a version for any given commit in those shapes.
 > `changelogForRelease` tasks (documented as being for single-module use - see the task reference
 > below), still use root's unrestricted `modulePath` exactly as before. `VersionResolver` itself
 > gained a generic `excludedModulePaths` parameter usable from either place, but wiring it into
-> ordinary-build version resolution would require `duckasteroid-java` to know which sibling projects
+> ordinary-build version resolution would require `duckasteroid-version` to know which sibling projects
 > apply `duckasteroid-release-flow` - a bigger, cross-plugin change not undertaken here since the
 > demonstrated bug was specifically in the aggregator tasks CI actually calls.
 
