@@ -10,8 +10,8 @@ import io.github.duckasteroid.conventions.ReleaseManifest
 import io.github.duckasteroid.conventions.VersionReport
 import io.github.duckasteroid.conventions.VersionReportExtension
 import io.github.duckasteroid.conventions.VersionResolver
-import io.github.duckasteroid.conventions.WorkflowChecker
-import io.github.duckasteroid.conventions.WorkflowInstaller
+import io.github.duckasteroid.conventions.ManagedFileChecker
+import io.github.duckasteroid.conventions.ManagedFileInstaller
 
 // Opt-in release-engineering tasks for the develop -> release -> main flow described in
 // VERSIONING.md at the repo root. Apply alongside duckasteroid-java, which computes
@@ -416,8 +416,8 @@ if (rootProject.tasks.findByName('explainVersions') == null) {
 // see MULTI_MODULE_RELEASE_FLOW.md's "Installing the workflows" section for the current limitation
 // this implies if applying projects use differing toolchain versions.
 //
-// WorkflowInstaller/WorkflowChecker (plain Groovy classes, no Gradle dependency, unit-tested
-// directly) do the actual marker/hash comparison - see WorkflowMarker's doc comment for the
+// ManagedFileInstaller/ManagedFileChecker (plain Groovy classes, no Gradle dependency, unit-tested
+// directly) do the actual marker/hash comparison - see ManagedFileMarker's doc comment for the
 // skip/overwrite rules. Resource bytes and the toolchain version are read at configuration time
 // (loadWorkflowResource() below, plus java.toolchain) and captured as plain local values, same
 // config-cache-safe pattern as the rest of this file: doLast blocks below never touch `project`.
@@ -440,21 +440,21 @@ if (rootProject.tasks.findByName('installReleaseWorkflows') == null) {
             templates.each { fileName, template ->
                 String body = template.replace('@@JAVA_VERSION@@', javaVersion)
                 File target = new File(workflowsDir, fileName)
-                WorkflowInstaller.Result result = WorkflowInstaller.install(target, pluginVersion, body, force)
+                ManagedFileInstaller.Result result = ManagedFileInstaller.install(target, 'release-flow', pluginVersion, body, force)
                 switch (result) {
-                    case WorkflowInstaller.Result.INSTALLED:
-                    case WorkflowInstaller.Result.OVERWRITTEN:
-                    case WorkflowInstaller.Result.FORCED:
+                    case ManagedFileInstaller.Result.INSTALLED:
+                    case ManagedFileInstaller.Result.OVERWRITTEN:
+                    case ManagedFileInstaller.Result.FORCED:
                         println "installReleaseWorkflows: wrote ${target} (${result})"
                         break
-                    case WorkflowInstaller.Result.UP_TO_DATE:
+                    case ManagedFileInstaller.Result.UP_TO_DATE:
                         println "installReleaseWorkflows: ${target} already up to date"
                         break
-                    case WorkflowInstaller.Result.SKIPPED_FOREIGN:
+                    case ManagedFileInstaller.Result.SKIPPED_FOREIGN:
                         logger.warn("installReleaseWorkflows: skipped ${target} - no duckasteroid marker found " +
                                 "(foreign or hand-written file); not overwriting it.")
                         break
-                    case WorkflowInstaller.Result.SKIPPED_MODIFIED:
+                    case ManagedFileInstaller.Result.SKIPPED_MODIFIED:
                         logger.warn("installReleaseWorkflows: skipped ${target} - edited since install (its body " +
                                 "no longer matches its marker hash); not overwriting it. Re-run with " +
                                 "-Pduckasteroid.workflows.force=true to discard those edits and take the new version.")
@@ -478,22 +478,22 @@ if (rootProject.tasks.findByName('checkReleaseWorkflows') == null) {
         doLast {
             fileNames.each { fileName ->
                 File target = new File(workflowsDir, fileName)
-                WorkflowChecker.CheckResult result = WorkflowChecker.check(target, pluginVersion)
+                ManagedFileChecker.CheckResult result = ManagedFileChecker.check(target, 'release-flow', pluginVersion)
                 switch (result.status) {
-                    case WorkflowChecker.Status.UP_TO_DATE:
+                    case ManagedFileChecker.Status.UP_TO_DATE:
                         println "checkReleaseWorkflows: ${target} is up to date (${pluginVersion})"
                         break
-                    case WorkflowChecker.Status.MISSING:
+                    case ManagedFileChecker.Status.MISSING:
                         logger.warn("checkReleaseWorkflows: ${target} does not exist - run installReleaseWorkflows to install it.")
                         break
-                    case WorkflowChecker.Status.NOT_OURS:
+                    case ManagedFileChecker.Status.NOT_OURS:
                         logger.warn("checkReleaseWorkflows: ${target} has no duckasteroid marker - it wasn't installed by installReleaseWorkflows.")
                         break
-                    case WorkflowChecker.Status.TAMPERED:
+                    case ManagedFileChecker.Status.TAMPERED:
                         logger.warn("checkReleaseWorkflows: ${target} has been edited since install (its body no " +
                                 "longer matches its marker hash from version ${result.installedVersion}).")
                         break
-                    case WorkflowChecker.Status.STALE:
+                    case ManagedFileChecker.Status.STALE:
                         logger.warn("checkReleaseWorkflows: ${target} was installed from duckasteroid-release-flow " +
                                 "${result.installedVersion}, but ${pluginVersion} is currently applied - run " +
                                 "installReleaseWorkflows to update it.")
@@ -545,7 +545,7 @@ static List<Map> releaseFlowTargets(Project root) {
 /** Reads a bundled workflow resource (see src/main/resources/.../conventions/workflows/) as text. */
 static String loadWorkflowResource(String fileName) {
     String path = "io/github/duckasteroid/conventions/workflows/${fileName}"
-    InputStream stream = WorkflowInstaller.classLoader.getResourceAsStream(path)
+    InputStream stream = ManagedFileInstaller.classLoader.getResourceAsStream(path)
     if (stream == null) {
         throw new IllegalStateException("Missing bundled resource: ${path}")
     }

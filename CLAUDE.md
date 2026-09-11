@@ -168,19 +168,24 @@ The convention plugins are split so consumers can opt into only what they want, 
       `project.version` from directly inside a `filesMatching { }` action — which normally executes at task
       *execution* time — hits the same `Task.project`-under-the-configuration-cache restriction described for
       `ConfigCacheSafeSystemReader` above.
-    - Each installed file's first line is a `# duckasteroid-workflow-version: X sha256:Y` marker comment, where
-      `Y` hashes everything *below* that line (the templated body) — computed at install time, since it depends
-      on the per-consumer Java version substitution. This is a self-attestation, not a tamper-proof checksum (the
+    - Each installed file's first line is a `# duckasteroid-managed: componentId X sha256:Y` marker comment
+      (`componentId` is `"release-flow"` for these two files — namespaced so a different duckasteroid-* plugin's
+      own installed file, e.g. a future composite action, can never be misread as this one's), where `Y` hashes
+      everything *below* that line (the templated body) — computed at install time, since it depends on the
+      per-consumer Java version substitution. This is a self-attestation, not a tamper-proof checksum (the
       hash lives in the file it verifies), which is an accepted tradeoff: it only needs to catch the realistic
       accident (editing a step without touching a comment three lines above it), not someone deliberately
       recomputing a matching hash — see the issue for the full rationale against adding an external manifest.
-    - `WorkflowMarker.groovy` (render/parse/hash the marker line), `WorkflowInstaller.groovy` (the
-      install-time skip/overwrite decision: no file → install; file present with no marker → foreign, skip; marker
-      present and hash matches → untouched since install, overwrite; hash mismatch → edited since install, skip
-      unless `-Pduckasteroid.workflows.force=true`), and `WorkflowChecker.groovy` (the read-only counterpart:
-      classifies an installed file as missing/not-ours/tampered/stale/up-to-date) are plain Groovy classes with no
-      Gradle dependency, mirroring the `VersionResolver`/`CommitAnalyzer` split — independently unit-tested via
-      real temp-directory files rather than mocking I/O.
+    - `ManagedFileMarker.groovy` (render/parse/hash the marker line, generic across whichever component installed
+      the file), `ManagedFileInstaller.groovy` (the install-time skip/overwrite decision: no file → install; file
+      present with no marker, or a marker for a *different* componentId → foreign, skip; marker present for this
+      componentId and hash matches → untouched since install, overwrite; hash mismatch → edited since install,
+      skip unless `-Pduckasteroid.workflows.force=true`), and `ManagedFileChecker.groovy` (the read-only
+      counterpart: classifies an installed file as missing/not-ours/tampered/stale/up-to-date) are plain Groovy
+      classes with no Gradle dependency, mirroring the `VersionResolver`/`CommitAnalyzer` split — independently
+      unit-tested via real temp-directory files rather than mocking I/O. Originally named `Workflow*` (scoped to
+      just these two release-flow files) before being generalized so any duckasteroid-* plugin's own
+      "install/verify a versioned file" task can reuse the same mechanism.
     - `checkReleaseWorkflows` only warns (stderr), consistent with the non-conforming-commit-message precedent in
       `VersionResolver` — never fails the build — and is deliberately **not** wired into `build`/`check`, so it
       adds no noise to an ordinary CI run; it's meant to be run explicitly.
@@ -194,9 +199,10 @@ The convention plugins are split so consumers can opt into only what they want, 
   scope (`**scope:**`) formatting, no-bump commits omitted, non-conforming commits still listed under Bug
   Fixes with their raw first line, and custom `typeRules` (including a custom `majorTypes` entry grouping
   under Breaking Changes without a `!` marker) threaded through correctly.
-- `src/test/java/WorkflowMarkerTest.java`, `WorkflowInstallerTest.java`, `WorkflowCheckerTest.java` — plain
-  JUnit, no Gradle/git involved (real temp-directory files, not mocked I/O): marker render/parse round-trip,
-  the install-time skip/overwrite decision matrix (no file/foreign file/untouched/edited, with and without
+- `src/test/java/ManagedFileMarkerTest.java`, `ManagedFileInstallerTest.java`, `ManagedFileCheckerTest.java` — plain
+  JUnit, no Gradle/git involved (real temp-directory files, not mocked I/O): marker render/parse round-trip
+  (including componentId mismatches reading as foreign), the install-time skip/overwrite decision matrix
+  (no file/foreign file/untouched/edited, with and without
   force), and the read-only check status classification (missing/not-ours/tampered/stale/up-to-date).
 - `src/test/java/ReleaseFlowPluginTest.java` — `ProjectBuilder` approach like `JavaConventionsPluginTest`:
   applies `duckasteroid-java` + `duckasteroid-release-flow` and asserts all six tasks are registered in the

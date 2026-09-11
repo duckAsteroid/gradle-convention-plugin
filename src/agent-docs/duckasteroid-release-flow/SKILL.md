@@ -74,10 +74,13 @@ apply the plugin.
   above are meant to run from (`.github/workflows/release-candidate.yml` /
   `promote-release.yml`, bundled with the plugin) into the consumer project. Registered once on
   `rootProject` — applying the plugin to several subprojects doesn't install multiple copies or
-  race on the same two files. Never clobbers a file it doesn't recognize as its own:
+  race on the same two files. Uses the generic `ManagedFileMarker`/`ManagedFileInstaller`/
+  `ManagedFileChecker` mechanism (componentId `"release-flow"`), so it never clobbers a file it
+  doesn't recognize as its own - including a file installed by a *different* duckasteroid-* plugin's
+  own component, should one ever install into the same directory:
   - No file at that path → installs it.
-  - File present, no `# duckasteroid-workflow-version: ...` marker comment as the first line →
-    treated as foreign/hand-written → **skipped**, with a warning.
+  - File present, no `# duckasteroid-managed: ...` marker comment as the first line, or a marker for
+    a different componentId → treated as foreign/hand-written → **skipped**, with a warning.
   - File present, marker found, its `sha256:` hash matches the file's current body → untouched
     since install → **overwritten** with the current template.
   - File present, marker found, hash does **not** match → edited locally since install →

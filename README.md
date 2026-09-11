@@ -83,9 +83,10 @@ These are not applied by `duckasteroid-java` — apply them alongside it if you 
     RC) is configurable via `changelog { rcScope = ... }` — see [VERSIONING.md](VERSIONING.md) for details.
   * `installReleaseWorkflows` — installs the `release-candidate.yml`/`promote-release.yml` GitHub Actions workflows
     (bundled with the plugin, templated with your project's Java toolchain version) into `.github/workflows/`.
-    Stamps each installed file with a `# duckasteroid-workflow-version: X sha256:Y` marker comment and never
-    overwrites a file it doesn't recognize as its own or one you've edited since install (skip + warn either way) —
-    pass `-Pduckasteroid.workflows.force=true` to discard local edits and take the new version anyway.
+    Stamps each installed file with a `# duckasteroid-managed: release-flow X sha256:Y` marker comment and never
+    overwrites a file it doesn't recognize as its own (or as belonging to a different duckasteroid-* component) or
+    one you've edited since install (skip + warn either way) — pass `-Pduckasteroid.workflows.force=true` to
+    discard local edits and take the new version anyway.
   * `checkReleaseWorkflows` — read-only: warns (never fails) if an installed workflow is missing, unmarked, edited
     since install, or older than the currently applied plugin version. Not wired into `build`/`check`; run it
     explicitly.

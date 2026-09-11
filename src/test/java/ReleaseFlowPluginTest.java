@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
  * MULTI_MODULE_RELEASE_FLOW.md) - task *actions* aren't exercised here (ProjectBuilder doesn't run
  * doLast blocks, and the aggregators' doLast wiring is deferred to a gradle.projectsEvaluated
  * callback that never fires under ProjectBuilder anyway; that logic is covered directly by
- * WorkflowInstallerTest/WorkflowCheckerTest/ReleaseManifestTest/VersionReportTest/
+ * ManagedFileInstallerTest/ManagedFileCheckerTest/ReleaseManifestTest/VersionReportTest/
  * ExplainVersionFunctionalTest instead), just that applying the plugin wires them all up correctly.
  * The project built here has no parent, so it IS its own rootProject - the same tasks container the
  * plugin registers the root-scoped tasks on.

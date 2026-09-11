@@ -275,10 +275,13 @@ yet).
 
 `./gradlew installReleaseWorkflows` copies the bundled `release-candidate.yml`/`promote-release.yml`
 templates into `.github/workflows/`, substituting the consuming project's own Java toolchain version.
-Each installed file starts with a `# duckasteroid-workflow-version: X sha256:Y` marker comment - `Y`
-hashes everything below that line, so a later `installReleaseWorkflows` run can tell an untouched
-install (safe to overwrite with the new template) from one you've hand-edited since (skipped, with a
-warning pointing at `-Pduckasteroid.workflows.force=true` to overwrite anyway). `./gradlew
+Each installed file starts with a `# duckasteroid-managed: release-flow X sha256:Y` marker comment
+(the generic `ManagedFileMarker`/`ManagedFileInstaller`/`ManagedFileChecker` mechanism, namespaced by
+componentId - `"release-flow"` for these two files - so a different duckasteroid-* plugin's own
+installed file is never misread as this one's) - `Y` hashes everything below that line, so a later
+`installReleaseWorkflows` run can tell an untouched install (safe to overwrite with the new template)
+from one you've hand-edited since (skipped, with a warning pointing at
+`-Pduckasteroid.workflows.force=true` to overwrite anyway). `./gradlew
 checkReleaseWorkflows` is the read-only counterpart - warns (never fails the build) if an installed
 file is missing, unmarked, edited since install, or older than the currently applied plugin version;
 it's not wired into `build`/`check`, so run it explicitly.
