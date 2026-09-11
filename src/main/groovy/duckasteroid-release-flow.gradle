@@ -238,7 +238,17 @@ if (rootProject.tasks.findByName('tagReleaseCandidates') == null) {
                     boolean pruneSuperseded = target.pruneSuperseded as boolean
                     int retain = target.retain as int
                     List<String> supersededTags = pruneSuperseded ? currentCycleTags.drop(retain) : []
-                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile), supersededTags)
+                    // A directory to glob at workflow time, not literal jar/sources/javadoc file
+                    // names: project.version (and therefore every Jar task's output file name) was
+                    // already fixed at *configuration* time of this same invocation, before the tag
+                    // above existed - it's still the ordinary-build "-SNAPSHOT" value, not the
+                    // release version just minted. The files actually published under that release
+                    // version only exist once a *later*, separate `./gradlew` invocation re-resolves
+                    // project.version against the now-pushed tag (see VersionResolver.exactTagAt) -
+                    // so the workflow has to build then glob this directory, rather than the manifest
+                    // predicting exact file names it can't yet know.
+                    String artifactsDir = ReleaseGitOps.relativePath(rootDir, target.libsDir as File)
+                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile), supersededTags, artifactsDir)
                 }
                 manifest.writeTo(manifestFile)
                 println "tagReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
@@ -281,7 +291,10 @@ if (rootProject.tasks.findByName('promoteReleaseCandidates') == null) {
                     File changelogFile = target.changelogFile as File
                     ReleaseGitOps.writeChangelog(changelogFile, ChangelogGenerator.generate(messages, target.typeRules as Map))
                     ReleaseGitOps.createAndPushTag(projectDir, tag)
-                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile))
+                    // See the matching comment in tagReleaseCandidates above for why this is a
+                    // directory to glob rather than literal artifact file names.
+                    String artifactsDir = ReleaseGitOps.relativePath(rootDir, target.libsDir as File)
+                    manifest.add(target.module as String, tag, ReleaseGitOps.relativePath(rootDir, changelogFile), [], artifactsDir)
                 }
                 manifest.writeTo(manifestFile)
                 println "promoteReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
@@ -414,6 +427,7 @@ static List<Map> releaseFlowTargets(Project root) {
                 changelogFile: p.layout.buildDirectory.file('changelog.md').get().asFile,
                 pruneSuperseded: p.extensions.getByType(ReleaseCandidatesExtension).pruneSuperseded.get(),
                 retain      : p.extensions.getByType(ReleaseCandidatesExtension).retain.get(),
+                libsDir     : p.layout.buildDirectory.dir('libs').get().asFile,
         ]
     }
 }

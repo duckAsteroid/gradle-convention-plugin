@@ -13,11 +13,14 @@
 # generates that project's own changelog) for each one with qualifying commits since its last
 # release, skips the rest, and writes build/release-manifest.json - one {module, tag, changelog,
 # supersededTags} entry per project actually released. This job turns each manifest entry into its
-# own GitHub pre-release, then deletes the GitHub Release (not the tag, not the published package)
-# for every tag listed in that entry's supersededTags - release candidates aren't permanent, so by
-# default only the newest one's Release stays visible (configurable via the releaseCandidates { }
-# extension - see VERSIONING.md). Works the same whether the repo releases as a single module or
-# several independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
+# own GitHub pre-release - attaching whatever jars sit in that entry's artifactsDir at release-creation
+# time, built fresh after tagging (see the "Build release artifacts" step below: the tag has to exist
+# first for the rebuilt jars to actually carry the release version rather than an ordinary "-SNAPSHOT"
+# one) - then deletes the GitHub Release (not the tag, not the published package) for every tag listed
+# in that entry's supersededTags - release candidates aren't permanent, so by default only the newest
+# one's Release stays visible (configurable via the releaseCandidates { } extension - see
+# VERSIONING.md). Works the same whether the repo releases as a single module or several
+# independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
 #
 # Deliberately self-contained rather than relying on the tag push to trigger a separate publish
 # workflow: a tag pushed with the default GITHUB_TOKEN does not trigger other workflow runs, so
@@ -64,9 +67,19 @@ jobs:
       - name: Tag next release candidates
         run: ./gradlew tagReleaseCandidates
 
-      # One GitHub pre-release per build/release-manifest.json entry. An empty manifest (no project
-      # had qualifying commits since its last release) means the loop below simply does nothing -
-      # not an error.
+      # Runs in a fresh ./gradlew invocation, after tagging: project.version (and therefore the jar/
+      # sources/javadoc file names) is only computed once per invocation, and the earlier
+      # tagReleaseCandidates invocation had already fixed it to an ordinary "-SNAPSHOT" value before
+      # the tag above existed. This invocation sees the just-pushed tag on HEAD and resolves the real
+      # release version instead (VersionResolver.exactTagAt), so the jars built here are the ones
+      # actually attached to the GitHub Release below and pushed by "Publish package" further down.
+      - name: Build release artifacts
+        run: ./gradlew assemble
+
+      # One GitHub pre-release per build/release-manifest.json entry, with every jar found directly
+      # under that entry's artifactsDir (jar/sources/javadoc - see "Build release artifacts" above)
+      # attached as a release asset. An empty manifest (no project had qualifying commits since its
+      # last release) means the loop below simply does nothing - not an error.
       - name: Create GitHub pre-releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,7 +87,12 @@ jobs:
           jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
             tag=$(jq -r '.tag' <<< "$entry")
             changelog=$(jq -r '.changelog' <<< "$entry")
-            gh release create "$tag" --notes-file "$changelog" --prerelease
+            artifactsDir=$(jq -r '.artifactsDir' <<< "$entry")
+            assets=()
+            if [ -n "$artifactsDir" ] && [ -d "$artifactsDir" ]; then
+              while IFS= read -r -d '' f; do assets+=("$f"); done < <(find "$artifactsDir" -maxdepth 1 -type f -name '*.jar' -print0)
+            fi
+            gh release create "$tag" --notes-file "$changelog" --prerelease "${assets[@]}"
           done
 
       # supersededTags lists this cycle's previous RC tags the one just created replaces (see

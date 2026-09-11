@@ -97,8 +97,8 @@ repo root (overwriting whatever the other one wrote last - only one of them runs
 
 ```json
 [
-  { "module": ":api", "tag": "api/v1.4.1-RC1", "changelog": "api/build/changelog.md", "supersededTags": ["api/v1.4.0-RC3"] },
-  { "module": ":",    "tag": "v2.1.0-RC1",      "changelog": "build/changelog.md",     "supersededTags": [] }
+  { "module": ":api", "tag": "api/v1.4.1-RC1", "changelog": "api/build/changelog.md", "supersededTags": ["api/v1.4.0-RC3"], "artifactsDir": "api/build/libs" },
+  { "module": ":",    "tag": "v2.1.0-RC1",      "changelog": "build/changelog.md",     "supersededTags": [],                "artifactsDir": "build/libs" }
 ]
 ```
 
@@ -107,9 +107,17 @@ repo root (overwriting whatever the other one wrote last - only one of them runs
 `supersededTags` is that project's previous release-candidate tags (this cycle, regardless of which
 candidate version they were minted under) that `tag` replaces - see the `releaseCandidates { }`
 extension in the agent-docs SKILL.md, added for
-[issue #6](https://github.com/duckAsteroid/gradle-convention-plugin/issues/6). The bundled
-workflow's "Create GitHub pre-releases" step loops over this file - one `gh release create` per
-entry, each pointed at its own `--notes-file` - instead of inferring a single tag via
+[issue #6](https://github.com/duckAsteroid/gradle-convention-plugin/issues/6). `artifactsDir` is that
+project's own `build/libs` directory, relative to the repo root - a directory to glob jars out of at
+release-creation time, not literal file names, since the jar/sources/javadoc file names for the
+release version don't exist yet at the point the manifest is written (`project.version` was already
+fixed to an ordinary "-SNAPSHOT" value earlier in the same `./gradlew tagReleaseCandidates`
+invocation, before the tag existed) - see
+[issue #10](https://github.com/duckAsteroid/gradle-convention-plugin/issues/10). The bundled
+workflow's "Build release artifacts" step (`./gradlew assemble`, in a fresh invocation that now sees
+the pushed tag and resolves the real release version) runs first, then "Create GitHub pre-releases"
+loops over the manifest - one `gh release create` per entry, each pointed at its own `--notes-file`
+plus whatever jars sit directly under its `artifactsDir` - instead of inferring a single tag via
 `git describe --tags --exact-match HEAD`, which only ever worked when exactly one tag landed on a
 commit; a separate "Delete superseded release-candidate pre-releases" step then runs one
 `gh release delete` per tag in each entry's `supersededTags` (never touching the tag itself or its
