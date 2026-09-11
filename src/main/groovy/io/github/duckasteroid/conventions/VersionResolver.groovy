@@ -7,6 +7,8 @@ import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.lib.RepositoryBuilder
 import org.eclipse.jgit.revwalk.RevCommit
 import org.eclipse.jgit.revwalk.RevWalk
+import org.eclipse.jgit.treewalk.TreeWalk
+import org.eclipse.jgit.treewalk.filter.TreeFilter
 
 import java.util.regex.Matcher
 import java.util.regex.Pattern
@@ -75,17 +77,25 @@ class VersionResolver {
      * @param typeRules see {@link CommitAnalyzer#DEFAULT_TYPE_RULES}; defaults to the built-in
      *        mapping. In the Gradle plugin this normally comes from the `commitAnalyzer { }`
      *        extension (see {@link CommitAnalyzerExtension#toTypeRules}), not the bare default.
+     * @param excludedModulePaths directories to exclude from modulePath's scope even though they'd
+     *        otherwise match - e.g. a root project (modulePath "") in "mixed mode" (see
+     *        MULTI_MODULE_RELEASE_FLOW.md, issue #8) excluding the modulePaths of subprojects that
+     *        independently apply duckasteroid-release-flow, so root doesn't also bump/release on a
+     *        commit that's entirely one of those subprojects' own. A commit only needs to touch one
+     *        path outside every excluded directory to still count - excluding "api" doesn't hide a
+     *        commit that touches both "api/" and a root-level file.
      */
     static String resolveBuildVersion(File repoDir, String tagPrefix, String branchName,
                                        String modulePath = '', List<String> fallbackPrefixes = [],
-                                       Map<CommitAnalyzer.Bump, Set<String>> typeRules = CommitAnalyzer.DEFAULT_TYPE_RULES) {
+                                       Map<CommitAnalyzer.Bump, Set<String>> typeRules = CommitAnalyzer.DEFAULT_TYPE_RULES,
+                                       List<String> excludedModulePaths = []) {
         withRepo(repoDir) { Repository repo ->
             String exact = exactTagAt(repo, tagPrefix)
             if (exact != null) {
                 // HEAD is a real, already-released commit (final or RC) - nothing to compute.
                 return exact
             }
-            String candidate = resolveCandidateVersionIn(repo, tagPrefix, modulePath, fallbackPrefixes, typeRules)
+            String candidate = resolveCandidateVersionIn(repo, tagPrefix, modulePath, fallbackPrefixes, typeRules, excludedModulePaths)
             String sanitizedBranch = sanitizeBranch(branchName)
             return sanitizedBranch ? "${candidate}-${sanitizedBranch}-SNAPSHOT" : "${candidate}-SNAPSHOT"
         }
@@ -99,9 +109,10 @@ class VersionResolver {
      */
     static String resolveCandidateVersion(File repoDir, String tagPrefix,
                                            String modulePath = '', List<String> fallbackPrefixes = [],
-                                           Map<CommitAnalyzer.Bump, Set<String>> typeRules = CommitAnalyzer.DEFAULT_TYPE_RULES) {
+                                           Map<CommitAnalyzer.Bump, Set<String>> typeRules = CommitAnalyzer.DEFAULT_TYPE_RULES,
+                                           List<String> excludedModulePaths = []) {
         return withRepo(repoDir) { Repository repo ->
-            resolveCandidateVersionIn(repo, tagPrefix, modulePath, fallbackPrefixes, typeRules)
+            resolveCandidateVersionIn(repo, tagPrefix, modulePath, fallbackPrefixes, typeRules, excludedModulePaths)
         }
     }
 
@@ -240,9 +251,13 @@ class VersionResolver {
      * @param fallbackPrefixes tried in order if tagPrefix has no final tag reachable from HEAD yet
      *        (only relevant for the SINCE_LAST_RELEASE fallback path, same as resolveCandidateVersion)
      * @param scope see {@link ChangelogScope}
+     * @param excludedModulePaths same exclusion semantics as {@link #resolveBuildVersion} - a
+     *        changelog generated for one project shouldn't list commits that belong entirely to a
+     *        sibling project it excludes.
      */
     static List<String> commitMessagesForChangelog(File repoDir, String tagPrefix, String modulePath,
-                                                    List<String> fallbackPrefixes, ChangelogScope scope) {
+                                                    List<String> fallbackPrefixes, ChangelogScope scope,
+                                                    List<String> excludedModulePaths = []) {
         return withRepo(repoDir) { Repository repo ->
             ObjectId sinceCommit = null
             if (scope == ChangelogScope.SINCE_PREVIOUS_RC) {
@@ -256,7 +271,7 @@ class VersionResolver {
                 Tuple2<String, String> lookup = lastFinalVersionLookup(repo, tagPrefix, fallbackPrefixes)
                 sinceCommit = commitForTag(repo, "${lookup.v1}${lookup.v2}")
             }
-            return commitMessagesSince(repo, sinceCommit, modulePath)
+            return commitMessagesSince(repo, sinceCommit, modulePath, excludedModulePaths)
         }
     }
 
@@ -264,7 +279,8 @@ class VersionResolver {
 
     private static String resolveCandidateVersionIn(Repository repo, String tagPrefix, String modulePath,
                                                      List<String> fallbackPrefixes,
-                                                     Map<CommitAnalyzer.Bump, Set<String>> typeRules) {
+                                                     Map<CommitAnalyzer.Bump, Set<String>> typeRules,
+                                                     List<String> excludedModulePaths = []) {
         Tuple2<String, String> lookup = lastFinalVersionLookup(repo, tagPrefix, fallbackPrefixes)
         String matchedPrefix = lookup.v1
         String lastFinal = lookup.v2
@@ -273,7 +289,7 @@ class VersionResolver {
         // whichever prefix actually matched, even though the version we ultimately bump and re-tag
         // always uses tagPrefix (this module's own).
         ObjectId sinceCommit = commitForTag(repo, "${matchedPrefix}${lastFinal}")
-        List<String> messages = commitMessagesSince(repo, sinceCommit, modulePath)
+        List<String> messages = commitMessagesSince(repo, sinceCommit, modulePath, excludedModulePaths)
         CommitAnalyzer.Bump bump = messages.isEmpty() ? CommitAnalyzer.Bump.NONE : CommitAnalyzer.analyze(messages, typeRules)
         return bumpVersion(lastFinal, bump)
     }
@@ -516,8 +532,21 @@ class VersionResolver {
      * into release" messages don't conform to Conventional Commits, which would otherwise trigger
      * the non-conforming-commit patch-bump fallback in {@link CommitAnalyzer} and add a meaningless
      * line to every changelog. This mirrors `git log --no-merges`.
+     *
+     * When excludedModulePaths is also non-empty, each candidate commit found above is further
+     * checked by {@link #touchesPathOutside} - a commit only counts if it changed something outside
+     * every excluded directory too (equivalent to `git log -- modulePath ':!excluded1' ':!excluded2'
+     * ...`), so a root project (modulePath "") can exclude the directories of subprojects that
+     * independently apply duckasteroid-release-flow (see {@link #resolveBuildVersion}'s doc, issue
+     * #8). Applied as a post-filter over addPath's result rather than folded into a single combined
+     * TreeFilter (AndTreeFilter of an include PathFilterGroup and a NotTreeFilter of the excludes):
+     * that combination looked correct but silently dropped commits that only touched paths outside
+     * both the include and exclude sets, because NotTreeFilter's recursive-descent pruning doesn't
+     * compose safely with a sibling PathFilterGroup in the same AndTreeFilter. Diffing each candidate
+     * commit against its parent directly, one candidate at a time, sidesteps that pitfall entirely.
      */
-    private static List<String> commitMessagesSince(Repository repo, ObjectId sinceCommitOrNull, String modulePath) {
+    private static List<String> commitMessagesSince(Repository repo, ObjectId sinceCommitOrNull, String modulePath,
+                                                      List<String> excludedModulePaths = []) {
         ObjectId headId = repo.resolve('HEAD')
         if (headId == null) {
             return []
@@ -530,12 +559,50 @@ class VersionResolver {
         if (modulePath) {
             logCommand = logCommand.addPath(modulePath)
         }
+        List<String> excludes = excludedModulePaths.findAll { it }
         List<String> messages = []
         logCommand.call().each { RevCommit commit ->
-            if (commit.parentCount <= 1) {
+            if (commit.parentCount <= 1 && (excludes.isEmpty() || touchesPathOutside(repo, commit, excludes))) {
                 messages << commit.fullMessage
             }
         }
         return messages
+    }
+
+    /**
+     * True if commit changed at least one path that isn't under any of excludedPaths - diffs commit
+     * against its single parent (or an empty tree, for a root commit with no parent) using a plain
+     * {@link TreeWalk} in recursive diff mode, the standard low-level JGit idiom for listing changed
+     * paths. Only ever called for commit.parentCount <= 1 - the caller's merge-commit exclusion runs
+     * first (see commitMessagesSince), so there's no second parent to consider here.
+     */
+    private static boolean touchesPathOutside(Repository repo, RevCommit commit, List<String> excludedPaths) {
+        TreeWalk walk = new TreeWalk(repo)
+        try {
+            if (commit.parentCount == 0) {
+                walk.addTree(commit.tree)
+            } else {
+                RevWalk rw = new RevWalk(repo)
+                ObjectId parentTree
+                try {
+                    parentTree = rw.parseCommit(commit.getParent(0).id).tree
+                } finally {
+                    rw.dispose()
+                }
+                walk.addTree(parentTree)
+                walk.addTree(commit.tree)
+            }
+            walk.recursive = true
+            walk.filter = commit.parentCount == 0 ? TreeFilter.ALL : TreeFilter.ANY_DIFF
+            while (walk.next()) {
+                String path = walk.pathString
+                if (excludedPaths.every { String excl -> path != excl && !path.startsWith("${excl}/") }) {
+                    return true
+                }
+            }
+            return false
+        } finally {
+            walk.close()
+        }
     }
 }

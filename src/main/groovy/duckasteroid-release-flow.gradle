@@ -206,8 +206,11 @@ if (rootProject.tasks.findByName('tagReleaseCandidates') == null) {
                     String tagPrefix = target.tagPrefix as String
                     String modulePath = target.modulePath as String
                     Map typeRules = target.typeRules as Map
+                    // Precomputed at configuration time by releaseFlowTargets - see its doc comment
+                    // and issue #8.
+                    List<String> excludedModulePaths = target.excludedModulePaths as List<String>
                     String candidate = forceVersion ?: VersionResolver.resolveCandidateVersion(
-                            projectDir, tagPrefix, modulePath, ['v'], typeRules)
+                            projectDir, tagPrefix, modulePath, ['v'], typeRules, excludedModulePaths)
                     String lastFinal = VersionResolver.lastFinalVersion(projectDir, tagPrefix, ['v'])
                     if (candidate == lastFinal) {
                         println "tagReleaseCandidates: skipping ${target.module} - no qualifying commits since ${tagPrefix}${lastFinal}"
@@ -225,7 +228,7 @@ if (rootProject.tasks.findByName('tagReleaseCandidates') == null) {
                         }
                     }
                     List<String> messages = VersionResolver.commitMessagesForChangelog(
-                            projectDir, tagPrefix, modulePath, ['v'], target.rcScope as ChangelogScope)
+                            projectDir, tagPrefix, modulePath, ['v'], target.rcScope as ChangelogScope, excludedModulePaths)
                     File changelogFile = target.changelogFile as File
                     ReleaseGitOps.writeChangelog(changelogFile, ChangelogGenerator.generate(messages, typeRules))
                     String tag = VersionResolver.nextReleaseCandidateTag(projectDir, tagPrefix, candidate)
@@ -275,9 +278,12 @@ if (rootProject.tasks.findByName('promoteReleaseCandidates') == null) {
                         return
                     }
                     // Must run BEFORE createAndPushTag below - see the file-level comment on
-                    // changelogForRelease/changelogForReleaseCandidate ordering.
+                    // changelogForRelease/changelogForReleaseCandidate ordering. Same precomputed
+                    // sibling exclusion as tagReleaseCandidates above - see releaseFlowTargets and
+                    // issue #8.
                     List<String> messages = VersionResolver.commitMessagesForChangelog(
-                            projectDir, tagPrefix, target.modulePath as String, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
+                            projectDir, tagPrefix, target.modulePath as String, ['v'],
+                            ChangelogScope.SINCE_LAST_RELEASE, target.excludedModulePaths as List<String>)
                     File changelogFile = target.changelogFile as File
                     ReleaseGitOps.writeChangelog(changelogFile, ChangelogGenerator.generate(messages, target.typeRules as Map))
                     ReleaseGitOps.createAndPushTag(projectDir, tag)
@@ -401,9 +407,19 @@ if (rootProject.tasks.findByName('checkReleaseWorkflows') == null) {
  * for the plural aggregator tasks to loop over. Must be called from a configuration-time hook (e.g.
  * rootProject.gradle.projectsEvaluated) after every project has finished applying its plugins, not
  * from inside a task's doLast.
+ *
+ * Each target's map also carries its own excludedModulePaths: every OTHER target's modulePath (see
+ * MULTI_MODULE_RELEASE_FLOW.md's "mixed mode" and issue #8 - without this, root's modulePath ""
+ * would also bump/release on a commit that's entirely a sibling's own independently-versioned
+ * subproject; harmless for siblings not actually nested under this target's own modulePath, since
+ * excluding a directory this target's include-path never reached in the first place is a no-op). A
+ * sibling's own empty-string root modulePath is naturally dropped by VersionResolver's blank-string
+ * filtering when it shows up here as someone else's exclusion, so no special-casing is needed for
+ * root. Computed here (configuration time), not as a helper called from inside a task's doLast, so
+ * the plural aggregator tasks stay configuration-cache-safe - see the file-level comment above.
  */
 static List<Map> releaseFlowTargets(Project root) {
-    return root.allprojects.findAll { it.pluginManager.hasPlugin('duckasteroid-release-flow') }.collect { Project p ->
+    List<Map> targets = root.allprojects.findAll { it.pluginManager.hasPlugin('duckasteroid-release-flow') }.collect { Project p ->
         [
                 module      : p.path,
                 projectDir  : p.projectDir,
@@ -416,6 +432,10 @@ static List<Map> releaseFlowTargets(Project root) {
                 retain      : p.extensions.getByType(ReleaseCandidatesExtension).retain.get(),
         ]
     }
+    targets.each { target ->
+        target.excludedModulePaths = targets.findAll { it != target }.collect { it.modulePath as String }
+    }
+    return targets
 }
 
 /** Reads a bundled workflow resource (see src/main/resources/.../conventions/workflows/) as text. */
