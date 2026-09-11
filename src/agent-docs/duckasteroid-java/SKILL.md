@@ -1,5 +1,5 @@
 ---
-description: Base Gradle convention plugin (duckAsteroid's personal projects) providing a Java toolchain, git-derived semantic versioning from Conventional Commits, a GitHub Packages repository DSL, and publishing scaffolding. Apply this first, before any other duckasteroid-* plugin.
+description: Base Gradle convention plugin (duckAsteroid's personal projects) providing a Java toolchain, a GitHub Packages repository DSL, and publishing scaffolding. Applies duckasteroid-version internally for git-derived semantic versioning. Apply this first, before any other duckasteroid-* plugin.
 ---
 
 # duckasteroid-java
@@ -33,31 +33,9 @@ githubPackages {
   `duckasteroid.java.version` entry in `gradle.properties`. No auto-download resolver is
   configured, so only JDKs Gradle can already detect locally are usable.
 - **Group** — `io.github.duckasteroid`.
-- **Version** — computed by `VersionResolver` (a small Conventional-Commits/semantic-release port),
-  not by axion-release's own nearest-tag logic directly, though axion-release still owns the tag
-  prefix scheme and is the fallback when forcing a version (see below). It finds the last *final*
-  release tag reachable from `HEAD` (plain `vX.Y.Z`, per-module via `<gradle-project-path>/vX.Y.Z`,
-  falling back to the root `vX.Y.Z` line for a brand-new subproject), then bumps it according to
-  Conventional Commits messages since that tag *that touched this module's own directory*:
-  - `feat` → minor, `fix`/`perf` → patch, `docs`/`style`/`refactor`/`test`/`chore`/`build`/`ci` →
-    no bump, by default (see `commitAnalyzer { }` below to change this).
-  - A `!` marker or `BREAKING CHANGE:` footer always forces a major bump, regardless of type rules.
-  - Anything that doesn't conform to Conventional Commits, or uses a type outside every configured
-    set, bumps patch with a warning on stderr (not silently ignored).
-  - The highest-severity qualifying commit wins.
-  - Decorated with `-SNAPSHOT` (optionally with the sanitized branch name folded in on feature
-    branches) unless `HEAD` sits exactly on a real release tag.
-- **`commitAnalyzer { }` extension** — customize which commit types map to which bump level:
-  ```groovy
-  commitAnalyzer {
-      minorTypes.add('perf2')   // adds to the default set, does not replace it
-      noBumpTypes.set(['chore'])  // replaces the default set entirely
-  }
-  ```
-  Four `SetProperty<String>`: `majorTypes`, `minorTypes`, `patchTypes`, `noBumpTypes`. Use `.add(...)`
-  to append to the default without losing it, `.set(...)` to replace it outright.
-- **`-Prelease.forceVersion=X.Y.Z`** — ultimate backstop. When set, none of the above analysis runs;
-  axion-release's own native `scmVersion.version` is used verbatim instead.
+- **Version** — provided by the auto-applied `duckasteroid-version` plugin (see its own SKILL.md for
+  the full computation, the `commitAnalyzer { }` extension, and the `-Prelease.forceVersion`
+  backstop) — applying `duckasteroid-java` gets you all of it with no extra configuration.
 - **`gitHubPackages { }` DSL** — registers the extension for consumers to add authenticated GitHub
   Packages *dependency-resolution* repositories in their own `repositories { }` block. No repository
   is added automatically; publishing to GitHub Packages is separately opt-in (see

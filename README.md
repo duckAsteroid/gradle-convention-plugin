@@ -8,7 +8,10 @@ The base convention plugin for Java projects. Apply it via `id 'duckasteroid-jav
 * Java 25 toolchain by default, overridable via `-Pduckasteroid.java.version` (or a `gradle.properties` entry)
 * Group `io.github.duckasteroid`
 * Versioning derived entirely from git — no version string is ever committed to `build.gradle`
-  (see [VERSIONING.md](VERSIONING.md) for the full explanation, worked examples, and the release flow)
+  (see [VERSIONING.md](VERSIONING.md) for the full explanation, worked examples, and the release flow).
+  Actually provided by the `duckasteroid-version` plugin, applied internally — apply it directly
+  instead of `duckasteroid-java` if you want this versioning scheme without the rest of `duckasteroid-java`'s
+  Java/POM/publishing conventions (e.g. for `duckasteroid-release-flow` on a non-Java project)
   * The expected tag prefix is derived from the Gradle project path, so each project's version is `${gradle project path}/v{number}`. For example a subproject at `:sub:module` looks for tags like `sub/module/v1.2.3`, while the root project just looks for `v1.2.3`
   * This makes versioning **multi-module friendly**: each module in a multi-project build can be tagged and released independently, without bumping the version of unrelated modules in the same repo
     * A module with no tag of its own yet falls back to the root project's plain `v` tag as its starting point
@@ -70,7 +73,10 @@ These are not applied by `duckasteroid-java` — apply them alongside it if you 
 * `duckasteroid-github-packages-publish` — publish to *this* project's own GitHub Packages feed (owner/repo derived
   from its git `origin` remote).
 * `duckasteroid-release-flow` — release-engineering tasks for a `develop`/`release` → `main` git flow, where
-  `release` accumulates release-candidate builds before an accepted RC is promoted to a final release on `main`:
+  `release` accumulates release-candidate builds before an accepted RC is promoted to a final release on `main`.
+  Depends on `duckasteroid-version` (not `duckasteroid-java` specifically — applying `duckasteroid-java`
+  satisfies this too, since it applies `duckasteroid-version` internally); only `installReleaseWorkflows`
+  additionally needs a java-toolchain-configuring plugin present, for the Java version in its `setup-java` step:
   * `tagReleaseCandidate` — tags and pushes the next `X.Y.Z-RCn` (auto-incrementing `n`), derived from the same
     conventional-commit analysis as the ordinary build version (or `release.forceVersion` if set). Intended to run
     on every push to `release`.
@@ -90,7 +96,11 @@ These are not applied by `duckasteroid-java` — apply them alongside it if you 
   * `checkReleaseWorkflows` — read-only: warns (never fails) if an installed workflow is missing, unmarked, edited
     since install, or older than the currently applied plugin version. Not wired into `build`/`check`; run it
     explicitly.
-  * All six are plain Gradle tasks, runnable locally as well as from CI — release engineering doesn't hard-depend
+  * `explainVersion` / `explainVersions` — read-only preview of what `tagReleaseCandidate(s)` would do right
+    now (last final release, every qualifying commit with its own classification, the resulting bump, the
+    candidate version, the exact next release-candidate tag), printed to the console and, by default,
+    written to `build/version-report.json` — see `versionReport { }` in [VERSIONING.md](VERSIONING.md).
+  * All ten are plain Gradle tasks, runnable locally as well as from CI — release engineering doesn't hard-depend
     on GitHub Actions being available. This repo's own `.github/workflows/release-candidate.yml` /
     `promote-release.yml` are a readable, human-facing reference for what `installReleaseWorkflows` installs
     (identical apart from the pinned Java 21 toolchain — see [VERSIONING.md](VERSIONING.md)).
