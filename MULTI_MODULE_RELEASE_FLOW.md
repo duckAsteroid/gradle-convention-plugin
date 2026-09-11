@@ -169,8 +169,10 @@ enumerates whatever *did* apply the plugin - just `:api` in that case.
 | `promoteReleaseCandidate`       | single project                 | Unchanged - promotes *this* project's nearest RC to final.                                         |
 | `changelogForReleaseCandidate`  | single project                 | Unchanged - previews *this* project's RC notes without tagging anything.                           |
 | `changelogForRelease`           | single project                 | Unchanged - previews *this* project's final release notes.                                         |
+| `explainVersion`                | single project                 | New (issue #5) - read-only preview of *this* project's next release-candidate version; never tags, pushes, or writes a changelog. |
 | `tagReleaseCandidates`          | registered once on `rootProject` | New. The task CI actually calls on every push to `release` - loops every applying project, skips unaffected ones, writes the manifest. |
 | `promoteReleaseCandidates`      | registered once on `rootProject` | New. The task CI actually calls on every push to `main` - loops every applying project, skips ones with no pending RC, writes the manifest. |
+| `explainVersions`               | registered once on `rootProject` | New (issue #5) - read-only, multi-module counterpart to `explainVersion`; same enumeration and skip/tag decision as `tagReleaseCandidates`, but never tags or pushes. |
 | `installReleaseWorkflows`       | registered once on `rootProject` | Unchanged in behavior, but now guarded so it only ever exists once - one workflow pair per repo, regardless of how many projects apply `duckasteroid-release-flow`. |
 | `checkReleaseWorkflows`         | registered once on `rootProject` | Same scoping change as `installReleaseWorkflows`.                                                  |
 

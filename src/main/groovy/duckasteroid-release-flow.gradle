@@ -7,6 +7,8 @@ import io.github.duckasteroid.conventions.CommitAnalyzerExtension
 import io.github.duckasteroid.conventions.ReleaseCandidatesExtension
 import io.github.duckasteroid.conventions.ReleaseGitOps
 import io.github.duckasteroid.conventions.ReleaseManifest
+import io.github.duckasteroid.conventions.VersionReport
+import io.github.duckasteroid.conventions.VersionReportExtension
 import io.github.duckasteroid.conventions.VersionResolver
 import io.github.duckasteroid.conventions.WorkflowChecker
 import io.github.duckasteroid.conventions.WorkflowInstaller
@@ -15,7 +17,7 @@ import io.github.duckasteroid.conventions.WorkflowInstaller
 // VERSIONING.md at the repo root. Apply alongside duckasteroid-java, which computes
 // project.ext.tagPrefix / project.ext.modulePath that these tasks reuse rather than recomputing.
 //
-// Eight tasks total. tagReleaseCandidate/promoteReleaseCandidate are the release-time counterpart
+// Ten tasks total. tagReleaseCandidate/promoteReleaseCandidate are the release-time counterpart
 // to duckasteroid-java's ordinary-build version resolution (they don't just *compute* a version,
 // they actually create and push a tag for it) for the applying project alone - handy for local,
 // single-module work. tagReleaseCandidates/promoteReleaseCandidates (plural - see below) are what
@@ -23,13 +25,15 @@ import io.github.duckasteroid.conventions.WorkflowInstaller
 // so the same mechanism covers a single-module repo, several independently-versioned modules, or a
 // shared root version, without any of those shapes needing special-case configuration - see
 // MULTI_MODULE_RELEASE_FLOW.md. changelogForReleaseCandidate/changelogForRelease generate release
-// notes for the applying project alone (see below); installReleaseWorkflows/checkReleaseWorkflows
-// (see issue #2, further down) install/verify the GitHub Actions workflow files that invoke the
-// plural tasks above. All eight are plain Gradle tasks, runnable locally as well as from CI -
-// release engineering shouldn't hard-depend on GitHub Actions being up. This repo's own
-// .github/workflows/*.yml are a human-readable reference for what installReleaseWorkflows installs
-// (see VERSIONING.md) - this repo can't apply its own plugins to itself, so they're not literally
-// produced by that task here.
+// notes for the applying project alone (see below); explainVersion/explainVersions (see issue #5,
+// further down) print (and, by default, write to build/version-report.json) a read-only preview of
+// what tagReleaseCandidate(s) would actually do right now, without tagging or pushing anything;
+// installReleaseWorkflows/checkReleaseWorkflows (see issue #2, further down) install/verify the
+// GitHub Actions workflow files that invoke the plural tasks above. All ten are plain Gradle tasks,
+// runnable locally as well as from CI - release engineering shouldn't hard-depend on GitHub Actions
+// being up. This repo's own .github/workflows/*.yml are a human-readable reference for what
+// installReleaseWorkflows installs (see VERSIONING.md) - this repo can't apply its own plugins to
+// itself, so they're not literally produced by that task here.
 //
 // tagReleaseCandidate/promoteReleaseCandidate respect release.forceVersion as the ultimate backstop,
 // same as the ordinary build version resolution in duckasteroid-java: if set, it's used verbatim, no
@@ -77,6 +81,10 @@ changelogExtension.rcScope.convention(ChangelogScope.SINCE_LAST_RELEASE)
 def releaseCandidatesExtension = project.extensions.create('releaseCandidates', ReleaseCandidatesExtension)
 releaseCandidatesExtension.pruneSuperseded.convention(true)
 releaseCandidatesExtension.retain.convention(0)
+
+def versionReportExtension = project.extensions.create('versionReport', VersionReportExtension)
+versionReportExtension.enabled.convention(true)
+versionReportExtension.outputFile.convention(project.layout.buildDirectory.file('version-report.json'))
 
 tasks.register('tagReleaseCandidate') {
     group = 'release'
@@ -164,6 +172,34 @@ tasks.register('changelogForRelease') {
         List<String> messages = VersionResolver.commitMessagesForChangelog(
                 repoDir, tagPrefix, modulePath, ['v'], ChangelogScope.SINCE_LAST_RELEASE)
         ReleaseGitOps.writeChangelog(outputFile, ChangelogGenerator.generate(messages, typeRules))
+    }
+}
+
+tasks.register('explainVersion') {
+    group = 'release'
+    description = 'Prints a breakdown of how this project\'s next release-candidate version would be ' +
+            'computed right now (and, by default, writes it to build/version-report.json) - read-only, ' +
+            'never tags or pushes anything. See versionReport { } to control the JSON file.'
+    def module = project.path
+    def tagPrefix = project.ext.tagPrefix
+    def modulePath = project.ext.modulePath
+    def repoDir = project.projectDir
+    def forceVersion = project.findProperty('release.forceVersion')
+    def typeRules = project.extensions.getByType(CommitAnalyzerExtension).toTypeRules()
+    def reportEnabled = versionReportExtension.enabled.get()
+    def reportFile = versionReportExtension.outputFile.get().asFile
+    doLast {
+        // No excludedModulePaths - same as the ordinary-build version resolution and the singular
+        // tagReleaseCandidate above, sibling-exclusion is a multi-module-aggregator-only concern
+        // (see releaseFlowTargets and issue #8).
+        String branch = ReleaseGitOps.currentBranch(repoDir)
+        VersionReport.Entry entry = VersionReport.buildEntry(
+                module, repoDir, tagPrefix, modulePath, ['v'], typeRules, [], forceVersion, branch)
+        println entry.render()
+        if (reportEnabled) {
+            entry.writeTo(reportFile)
+            println "explainVersion: wrote ${reportFile}"
+        }
     }
 }
 
@@ -304,6 +340,60 @@ if (rootProject.tasks.findByName('promoteReleaseCandidates') == null) {
                 }
                 manifest.writeTo(manifestFile)
                 println "promoteReleaseCandidates: wrote ${manifestFile} (${manifest.size()} ${manifest.size() == 1 ? 'entry' : 'entries'})"
+            }
+        }
+    }
+}
+
+// explainVersions (see issue #5): the read-only, multi-module-aware preview counterpart to
+// tagReleaseCandidates - same releaseFlowTargets/root-registration mechanism, same skip/tag decision
+// (candidate == lastFinal), but never tags, pushes, or mints anything. versionReport { } is read from
+// whichever applying project's script wins the registration guard below (normally root), same
+// "first applying project decides" rule installReleaseWorkflows already uses for its Java-toolchain
+// substitution - not a new, second rule.
+if (rootProject.tasks.findByName('explainVersions') == null) {
+    def forceVersion = rootProject.findProperty('release.forceVersion')
+    def reportEnabled = versionReportExtension.enabled.get()
+    def reportFile = versionReportExtension.outputFile.get().asFile
+    def aggregator = rootProject.tasks.register('explainVersions') {
+        group = 'release'
+        description = 'Loops every project applying duckasteroid-release-flow and prints a breakdown ' +
+                'of how each one\'s next release-candidate version would be computed right now (and, by ' +
+                'default, writes them to build/version-report.json) - the read-only preview counterpart ' +
+                'to tagReleaseCandidates. Registered once on the root project regardless of which ' +
+                'project(s) apply duckasteroid-release-flow - see MULTI_MODULE_RELEASE_FLOW.md.'
+    }
+    rootProject.gradle.projectsEvaluated {
+        List<Map> targets = releaseFlowTargets(rootProject)
+        aggregator.configure {
+            doLast {
+                List<VersionReport.Entry> entries = []
+                targets.each { target ->
+                    File projectDir = target.projectDir as File
+                    String tagPrefix = target.tagPrefix as String
+                    String modulePath = target.modulePath as String
+                    Map typeRules = target.typeRules as Map
+                    List<String> excludedModulePaths = target.excludedModulePaths as List<String>
+                    String branch = ReleaseGitOps.currentBranch(projectDir)
+                    VersionReport.Entry entry = VersionReport.buildEntry(target.module as String, projectDir,
+                            tagPrefix, modulePath, ['v'], typeRules, excludedModulePaths, forceVersion, branch)
+                    // Same skip/tag decision as tagReleaseCandidates above - see its own doLast - so
+                    // this preview can never disagree with what tagging would actually do.
+                    if (entry.candidate == entry.lastFinal) {
+                        entry.action = 'SKIP'
+                        entry.reason = "no qualifying commits since ${tagPrefix}${entry.lastFinal}"
+                    } else {
+                        entry.action = 'TAG'
+                        entry.reason = "would mint ${entry.nextReleaseCandidateTag}"
+                    }
+                    println "explainVersions: ${target.module} - ${entry.action} (${entry.reason})"
+                    entries << entry
+                }
+                entries.each { println it.render() }
+                if (reportEnabled) {
+                    VersionReport.writeJsonArray(entries, reportFile)
+                    println "explainVersions: wrote ${reportFile} (${entries.size()} ${entries.size() == 1 ? 'entry' : 'entries'})"
+                }
             }
         }
     }

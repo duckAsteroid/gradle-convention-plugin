@@ -177,8 +177,13 @@ computed candidate version into an actual, pushed git tag, plus matching release
   run, before minting that module's tag, for the same reason a standalone invocation must run before
   its tagging/promoting counterpart - the changelog generator looks for the *previous* RC tag / the
   last *final* tag reachable from HEAD, which the about-to-be-created new tag would otherwise shadow.
+- **`explainVersion`** / **`explainVersions`** (see "Previewing a version before cutting it" below)
+  print - and, by default, write to `build/version-report.json` - a read-only breakdown of what
+  `tagReleaseCandidate(s)` would actually do right now: the last final release, every qualifying
+  commit since it with its own classification, the resulting bump, the candidate version, and the
+  exact next release-candidate tag. Never tags, pushes, or mints anything.
 
-Eight tasks total - the six above, plus `installReleaseWorkflows`/`checkReleaseWorkflows` (install and
+Ten tasks total - the eight above, plus `installReleaseWorkflows`/`checkReleaseWorkflows` (install and
 verify the two GitHub Actions workflows that invoke them; see "Installing the release workflows"
 below). All are plain Gradle tasks (`./gradlew tagReleaseCandidates`, etc.), runnable locally as well as
 from CI - release engineering doesn't hard-depend on GitHub Actions being available.
@@ -219,6 +224,52 @@ bundled workflow turns into one `gh release delete` per tag (see [issue
 #6](https://github.com/duckAsteroid/gradle-convention-plugin/issues/6)). `promoteReleaseCandidate(s)`
 never prunes anything itself: by the time a promotion happens there's only ever one live RC for that
 module, since each new RC already superseded the one before it.
+
+## Previewing a version before cutting it
+
+`./gradlew explainVersion` prints a breakdown of what `tagReleaseCandidate` would actually do right
+now, without tagging or pushing anything:
+
+```
+:api: last final release api/v1.4.0
+  - [MINOR] feat(auth): add SSO support
+  - [PATCH] fix: correct a null check
+  bump: MINOR
+  candidate: api/v1.5.0
+  next release-candidate tag: api/v1.5.0-RC1
+  ordinary build version right now: 1.5.0-SNAPSHOT
+```
+
+Every field is produced by the exact same `VersionResolver` calls `tagReleaseCandidate` itself
+makes (including `nextReleaseCandidateTag`, reused verbatim), so this can never report something
+tagging would then contradict. `explainVersions` is the multi-module aggregate counterpart - same
+`releaseFlowTargets`/root-registration mechanism as `tagReleaseCandidates`, and the same
+`candidate == lastFinal` skip/tag decision, so it reports one line (and one detail block) per
+applying project:
+
+```
+explainVersions: :api - TAG (would mint api/v1.5.0-RC1)
+explainVersions: : - SKIP (no qualifying commits since v2.1.0)
+```
+
+Both also write a JSON report - `build/version-report.json` by default - built from the same data as
+the console output: `module`, `tagPrefix`, `modulePath`, `lastFinal`, `commits` (each with its own
+`type`/`scope`/`description`/`breaking`/`bump`), the overall `bump`, `candidate`,
+`forceVersion` (or `null`), `nextReleaseCandidateTag`, and `buildVersion`. `explainVersions`' array
+entries additionally carry `action` (`"TAG"`/`"SKIP"`) and `reason`, layered on after the fact -
+`explainVersion`'s single-object report has nothing to decide, so it omits both. Configurable via the
+`versionReport { }` extension:
+
+```groovy
+versionReport {
+    enabled = false                                                 // default: true - console only
+    outputFile = layout.buildDirectory.file('reports/version.json') // default: build/version-report.json
+}
+```
+
+Neither task ever tags, pushes, prunes, or writes a changelog - they're read-only previews, safe to
+run at any time (including on `develop` or a feature branch, where there's no RC cycle in progress
+yet).
 
 ## Installing the release workflows
 

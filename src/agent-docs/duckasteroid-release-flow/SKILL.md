@@ -18,8 +18,8 @@ plugins {
 
 ## Tasks
 
-Eight tasks total, all plain Gradle tasks, runnable locally as well as from CI. Four are
-single-project (act on whichever project applies the plugin); four are multi-module-aware
+Ten tasks total, all plain Gradle tasks, runnable locally as well as from CI. Five are
+single-project (act on whichever project applies the plugin); five are multi-module-aware
 aggregators registered exactly once, on `rootProject`, no matter how many (or which) projects
 apply the plugin.
 
@@ -33,6 +33,13 @@ apply the plugin.
 - **`changelogForReleaseCandidate`** / **`changelogForRelease`** — generate Markdown release notes
   for *this* project to `build/changelog.md`. Only needed for local preview or the single-project
   singular tasks above — the aggregator tasks below generate each project's changelog internally.
+- **`explainVersion`** (issue #5) — read-only preview of what `tagReleaseCandidate` would do right
+  now for *this* project: last final release, every qualifying commit since it with its own
+  type/scope/bump classification, the resulting overall bump, the candidate version, and the exact
+  next release-candidate tag (`VersionResolver.nextReleaseCandidateTag`, reused verbatim, so it can
+  never drift from what tagging would actually mint). Never tags, pushes, or writes a changelog.
+  Prints to the console and, by default, writes the same data as JSON to
+  `build/version-report.json` — see `versionReport { }` below.
 
 **Multi-module aggregators (what CI actually calls):**
 
@@ -56,6 +63,13 @@ apply the plugin.
 - **`promoteReleaseCandidates`** — the `main`-push counterpart. Same enumeration, but promotes
   each applying project's nearest reachable RC tag to final; a project with no pending RC this
   cycle is skipped rather than failing the whole task.
+- **`explainVersions`** (issue #5) — the read-only, multi-module counterpart to `explainVersion`:
+  same `releaseFlowTargets` enumeration and the same `candidate == lastFinal` skip/tag decision as
+  `tagReleaseCandidates`, but never tags, pushes, or mints anything. Prints one line per applying
+  project (`explainVersions: :api - TAG (would mint api/v1.5.0-RC1)` /
+  `explainVersions: : - SKIP (no qualifying commits since v2.1.0)`) plus each module's detail block,
+  and, by default, writes the whole set as a JSON array to `build/version-report.json` - each
+  element the same shape `explainVersion` produces, with `action`/`reason` layered on.
 - **`installReleaseWorkflows`** — installs the two GitHub Actions workflows the aggregator tasks
   above are meant to run from (`.github/workflows/release-candidate.yml` /
   `promote-release.yml`, bundled with the plugin) into the consumer project. Registered once on
@@ -96,10 +110,14 @@ mechanism (see `MULTI_MODULE_RELEASE_FLOW.md` for the full writeup with worked e
 - **One global version for the whole repo** — apply only at the root even with subprojects
   present. Root's unrestricted `modulePath` means any commit anywhere counts toward the one shared
   version.
-- **Mixed** — apply at root *and* to specific subprojects needing independent versioning. Known
-  limitation: root's scope isn't currently exclusive of opted-in subprojects' paths, so root ends
-  up tagged on essentially every qualifying push, not just changes outside those subprojects (see
-  [issue #8](https://github.com/duckAsteroid/gradle-convention-plugin/issues/8)).
+- **Mixed** — apply at root *and* to specific subprojects needing independent versioning. Root's
+  own commit scope automatically excludes every other applying project's `modulePath` (derived from
+  `releaseFlowTargets`, no manual configuration needed), so a commit entirely inside `:api` bumps
+  `:api` alone rather than also bumping root (see
+  [issue #8](https://github.com/duckAsteroid/gradle-convention-plugin/issues/8), fixed). This
+  exclusion only applies to the release-flow tasks (`tagReleaseCandidates`/`promoteReleaseCandidates`/
+  `explainVersions`) - ordinary build version resolution and the singular per-project tasks are
+  intentionally unaffected.
 
 `installReleaseWorkflows`'s Java-toolchain substitution picks up whichever applying project's
 script wins the registration guard first — if applying projects use different Java versions, the
@@ -154,6 +172,24 @@ releaseCandidates {
 - `promoteReleaseCandidate(s)` never prunes anything — by the time a promotion happens there's only
   ever one live RC for that module (each new RC already superseded the one before it), so there's
   nothing left to clean up.
+
+## `versionReport { }` extension
+
+Controls `explainVersion`/`explainVersions`' `build/version-report.json` file - the console
+breakdown they print always happens regardless of this extension:
+
+```groovy
+versionReport {
+    enabled = false                                                 // default: true — console only
+    outputFile = layout.buildDirectory.file('reports/version.json') // default: build/version-report.json
+}
+```
+
+Plain scalar `Property<T>`s, like `releaseCandidates { }`/`changelog { }` — no `SetProperty`
+append-vs-replace gotcha, `.convention(...)` works exactly as expected. `explainVersions` reads this
+from whichever applying project's script wins the registration guard (normally root) — the same
+"first applying project decides" rule `installReleaseWorkflows` already uses for its Java-toolchain
+substitution, not a new one.
 
 ## Typical CI wiring
 
