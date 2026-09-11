@@ -1,9 +1,12 @@
 # Versioning strategy
 
-This document explains, in detail, how `duckasteroid-java` computes a project's version and how the
-opt-in `duckasteroid-release-flow` plugin turns that computation into actual git tags and releases.
-For the shorter summary see [README.md](README.md); this file is the "why" and "exactly how" behind
-it.
+This document explains, in detail, how `duckasteroid-version` computes a project's version and how
+the opt-in `duckasteroid-release-flow` plugin turns that computation into actual git tags and
+releases. `duckasteroid-java` applies `duckasteroid-version` internally - applying `duckasteroid-java`
+gets you everything below with no extra configuration; apply `duckasteroid-version` directly only if
+you want this versioning scheme without the rest of `duckasteroid-java`'s Java/POM/publishing
+conventions (e.g. `duckasteroid-release-flow` on a non-Java project). For the shorter summary see
+[README.md](README.md); this file is the "why" and "exactly how" behind it.
 
 ## The short version
 
@@ -24,7 +27,7 @@ classification also drives auto-generated release notes - see "Generating releas
 
 ## Why not just use axion-release's own version computation?
 
-`duckasteroid-java` still applies and configures
+`duckasteroid-version` still applies and configures
 [axion-release](https://github.com/allegro/axion-release-plugin) - it's what supplies the per-module
 tag prefix scheme (see below) and, importantly, it's still what runs when you explicitly override the
 version (see "The `release.forceVersion` backstop" below). But axion-release's own default version
@@ -68,7 +71,7 @@ there's genuinely nothing there to classify, so it's NONE with no warning.
 ## Configuring the rules
 
 Which types map to which bump is configurable per project via the `commitAnalyzer { }` extension
-(registered by `duckasteroid-java.gradle`, backed by `CommitAnalyzerExtension`):
+(registered by `duckasteroid-version.gradle`, backed by `CommitAnalyzerExtension`):
 
 ```groovy
 commitAnalyzer {
@@ -97,8 +100,8 @@ Two implementation details worth knowing if you're changing this code, not just 
   property's actual value from the start, so a later `.add(...)` genuinely appends, while `.set(...)`
   still replaces the whole thing either way.
 - **Version computation is deferred to `project.afterEvaluate { }`.** Applying a precompiled script
-  plugin like `duckasteroid-java` runs the whole plugin script synchronously as part of processing the
-  consumer's `plugins { }` block - before the rest of their `build.gradle` (including any
+  plugin like `duckasteroid-version` runs the whole plugin script synchronously as part of processing
+  the consumer's `plugins { }` block - before the rest of their `build.gradle` (including any
   `commitAnalyzer { }` block) has executed at all. Computing `project.version` directly in the plugin
   script, rather than in `afterEvaluate`, would always see the untouched defaults and silently ignore
   the consumer's configuration.
@@ -144,8 +147,9 @@ with the repo checked out, `./gradlew build` computes the same version it would 
 
 ## The `develop` → `release` → `main` flow
 
-`duckasteroid-release-flow` (opt-in - apply it alongside `duckasteroid-java`) adds tasks that turn a
-computed candidate version into an actual, pushed git tag, plus matching release notes:
+`duckasteroid-release-flow` (opt-in - apply it alongside `duckasteroid-version`, or `duckasteroid-java`
+which applies that internally) adds tasks that turn a computed candidate version into an actual,
+pushed git tag, plus matching release notes:
 
 ```
  develop/feature branches          release                          main
@@ -289,8 +293,9 @@ to cover both the RC and final-release cases via the `develop` → `release` →
 
 ## Dogfooding this repo's own plugin
 
-`duckasteroid-java`/`duckasteroid-release-flow` are defined *in this repo* (`src/main/groovy/*.gradle`)
-and this repo's own `build.gradle` **does** apply both to itself, pinned to a specific already-published
+`duckasteroid-java`/`duckasteroid-version`/`duckasteroid-release-flow` are defined *in this repo*
+(`src/main/groovy/*.gradle`) and this repo's own `build.gradle` **does** apply `duckasteroid-java`
+(which applies `duckasteroid-version` internally) and `duckasteroid-release-flow` to itself, pinned to a specific already-published
 version (e.g. `1.0.0-RC4`), resolved from this repo's own GitHub Packages feed via
 `settings.gradle`'s `io.github.duckasteroid.github-packages-settings` bootstrap - the same mechanism
 any other consumer uses.
@@ -306,7 +311,7 @@ whatever's on `HEAD`, so a change to `duckasteroid-java.gradle` doesn't affect t
 until a new version has actually been published and the pinned version bumped.
 
 `project.version` for this repo's own root project **is** computed by `VersionResolver`, via
-`duckasteroid-java`'s `afterEvaluate` hook, the same as any consumer. There used to be a leftover
+`duckasteroid-version`'s `afterEvaluate` hook, the same as any consumer. There used to be a leftover
 `version = scmVersion.version` line in `build.gradle` from before this repo applied `duckasteroid-java`,
 but it was dead code - the plugin's own `afterEvaluate` always fires later and overwrites it - so it's
 been removed. `./gradlew currentVersion` is a red herring here: it's axion-release's own native task and
@@ -370,13 +375,13 @@ If it's set, none of the above logic runs - axion-release's own native `forceVer
 (https://axion-release-plugin.readthedocs.io/en/latest/configuration/force_version/) is used
 untouched, verbatim. This is deliberate and explicit, not an emergent property of some shared
 "resolve version" helper: the check is repeated at every call site (the ordinary build version in
-`duckasteroid-java.gradle`, and both tasks in `duckasteroid-release-flow.gradle`) so that a future
+`duckasteroid-version.gradle`, and both tasks in `duckasteroid-release-flow.gradle`) so that a future
 change to one of them can't accidentally make the backstop stop working elsewhere. The intent, in the
 author's own words: *"Don't do anything clever, just release whatever I say the number is."*
 
 ## Multi-module repositories
 
-The tag prefix scheme (owned by `duckasteroid-java`'s `scmVersion.tag` configuration, unchanged from
+The tag prefix scheme (owned by `duckasteroid-version`'s `scmVersion.tag` configuration, unchanged from
 before this whole commit-analysis scheme existed) derives each module's own prefix from its Gradle
 project path: `sub/module/v1.2.3` for a subproject at `:sub:module`, or plain `v1.2.3` at the root.
 Each module in a multi-project build is versioned and released independently - tagging one module
@@ -416,15 +421,17 @@ GitHub Releases for several independently-versioned modules in one repository is
   the pushed commit.
 - `installReleaseWorkflows`/`checkReleaseWorkflows` are likewise registered exactly once, regardless of how
   many projects apply `duckasteroid-release-flow` - one workflow pair per repository.
-- Root's `modulePath` is always empty (see above), so in mixed mode root is not scoped *away* from an
-  independently-versioned subproject's changes - see MULTI_MODULE_RELEASE_FLOW.md's "known limitation"
-  note for what that means in practice.
+- In mixed mode (root plus specific independently-versioned subprojects), root's own commit scope
+  automatically excludes every other applying project's `modulePath`, so a commit entirely inside a
+  subproject bumps that subproject alone rather than also bumping root - see
+  MULTI_MODULE_RELEASE_FLOW.md's "Multi-project repositories" section for the mechanism
+  (`excludedModulePaths`, derived from `releaseFlowTargets`, no manual configuration needed).
 
 ## Why JGit, not the `git` CLI
 
 `VersionResolver` talks to git via [JGit](https://www.eclipse.org/jgit/), not by shelling out to the
 `git` binary, for a specific, load-bearing reason: `resolveBuildVersion` is called from
-`version = ...` in `duckasteroid-java.gradle`, which runs at Gradle *configuration* time - and
+`version = ...` in `duckasteroid-version.gradle`, which runs at Gradle *configuration* time - and
 starting an external process during configuration is incompatible with the [Gradle configuration
 cache](https://docs.gradle.org/current/userguide/configuration_cache.html#config_cache:requirements:external_processes).
 JGit is a pure-Java git implementation, so it doesn't trip that restriction (this is also why
@@ -453,7 +460,8 @@ extra wiring.
   computed version, and `commitMessagesForChangelog` for both `ChangelogScope`s (including the
   previous-RC-tag fallback when no previous RC exists yet).
 - [`CommitAnalyzerExtensionTest`](src/test/java/CommitAnalyzerExtensionTest.java) - applies
-  `duckasteroid-java` via `ProjectBuilder` and exercises the `commitAnalyzer { }` extension itself:
+  `duckasteroid-java` (which applies `duckasteroid-version` internally) via `ProjectBuilder` and
+  exercises the `commitAnalyzer { }` extension itself:
   its defaults mirror `CommitAnalyzer.DEFAULT_TYPE_RULES` exactly, `.add(...)` appends onto the
   default rather than replacing it, `.set(...)` replaces it, and each of the four properties can be
   configured independently of the others.
