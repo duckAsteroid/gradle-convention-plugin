@@ -20,18 +20,20 @@ class ReleaseManifest {
         final String tag
         final String changelog
         final List<String> supersededTags
+        final String artifactsDir
 
-        Entry(String module, String tag, String changelog, List<String> supersededTags = []) {
+        Entry(String module, String tag, String changelog, List<String> supersededTags = [], String artifactsDir = '') {
             this.module = module
             this.tag = tag
             this.changelog = changelog
             this.supersededTags = supersededTags
+            this.artifactsDir = artifactsDir
         }
 
         Map<String, Object> toMap() {
             // LinkedHashMap (Groovy map literals preserve insertion order) so the JSON key order
-            // always matches the documented example: module, tag, changelog, supersededTags.
-            return [module: module, tag: tag, changelog: changelog, supersededTags: supersededTags]
+            // always matches the documented example: module, tag, changelog, supersededTags, artifactsDir.
+            return [module: module, tag: tag, changelog: changelog, supersededTags: supersededTags, artifactsDir: artifactsDir]
         }
     }
 
@@ -45,9 +47,13 @@ class ReleaseManifest {
      *        should be deleted now that {@code tag} supersedes them (see the {@code releaseCandidates
      *        { } } extension) - empty when pruning is disabled or nothing qualifies. The tags
      *        themselves are never deleted, only their GitHub Release.
+     * @param artifactsDir this project's own {@code build/libs} directory, relative to the repo
+     *        root, for the workflow to glob jars out of and attach to the GitHub Release - see the
+     *        note on why this is a directory to glob rather than literal file names in
+     *        duckasteroid-release-flow.gradle where it's computed.
      */
-    void add(String module, String tag, String changelog, List<String> supersededTags = []) {
-        entries << new Entry(module, tag, changelog, supersededTags)
+    void add(String module, String tag, String changelog, List<String> supersededTags = [], String artifactsDir = '') {
+        entries << new Entry(module, tag, changelog, supersededTags, artifactsDir)
     }
 
     boolean isEmpty() {
