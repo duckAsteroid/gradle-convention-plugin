@@ -1,4 +1,4 @@
-# duckasteroid-workflow-version: 1.2.0 sha256:e8f74c243b4bde6f6a9eeaef70b1a2262dcec468ab345a085f78b9330cf05833
+# duckasteroid-workflow-version: 1.4.0 sha256:8696638c009b1562d8cf273972c5af46c26a61798e0b5ba0fda9cb1dc4e50244
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
@@ -12,10 +12,16 @@
 # Auto-bumps the release-candidate number on every push to `release`: tagReleaseCandidates loops
 # every project in the build that applies duckasteroid-release-flow, tags/pushes the next RC (and
 # generates that project's own changelog) for each one with qualifying commits since its last
-# release, skips the rest, and writes build/release-manifest.json - one {module, tag, changelog}
-# entry per project actually released. This job then turns each manifest entry into its own GitHub
-# pre-release, all in the same job. Works the same whether the repo releases as a single module or
-# several independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
+# release, skips the rest, and writes build/release-manifest.json - one {module, tag, changelog,
+# supersededTags} entry per project actually released. This job turns each manifest entry into its
+# own GitHub pre-release - attaching whatever jars sit in that entry's artifactsDir at release-creation
+# time, built fresh after tagging (see the "Build release artifacts" step below: the tag has to exist
+# first for the rebuilt jars to actually carry the release version rather than an ordinary "-SNAPSHOT"
+# one) - then deletes the GitHub Release (not the tag, not the published package) for every tag listed
+# in that entry's supersededTags - release candidates aren't permanent, so by default only the newest
+# one's Release stays visible (configurable via the releaseCandidates { } extension - see
+# VERSIONING.md). Works the same whether the repo releases as a single module or several
+# independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
 #
 # Deliberately self-contained rather than relying on the tag push to trigger a separate publish
 # workflow: a tag pushed with the default GITHUB_TOKEN does not trigger other workflow runs, so
@@ -34,10 +40,7 @@ jobs:
     env:
       # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
       # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
-      # the default Actions env, GITHUB_TOKEN has to be exported explicitly. Manually restored here
-      # (not from the 1.2.0 template, which is missing it - see issue tracking that regression) -
-      # checkReleaseWorkflows will correctly flag this file as edited-since-install until a fixed
-      # version is published and re-installed.
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -65,9 +68,19 @@ jobs:
       - name: Tag next release candidates
         run: ./gradlew tagReleaseCandidates
 
-      # One GitHub pre-release per build/release-manifest.json entry. An empty manifest (no project
-      # had qualifying commits since its last release) means the loop below simply does nothing -
-      # not an error.
+      # Runs in a fresh ./gradlew invocation, after tagging: project.version (and therefore the jar/
+      # sources/javadoc file names) is only computed once per invocation, and the earlier
+      # tagReleaseCandidates invocation had already fixed it to an ordinary "-SNAPSHOT" value before
+      # the tag above existed. This invocation sees the just-pushed tag on HEAD and resolves the real
+      # release version instead (VersionResolver.exactTagAt), so the jars built here are the ones
+      # actually attached to the GitHub Release below and pushed by "Publish package" further down.
+      - name: Build release artifacts
+        run: ./gradlew assemble
+
+      # One GitHub pre-release per build/release-manifest.json entry, with every jar found directly
+      # under that entry's artifactsDir (jar/sources/javadoc - see "Build release artifacts" above)
+      # attached as a release asset. An empty manifest (no project had qualifying commits since its
+      # last release) means the loop below simply does nothing - not an error.
       - name: Create GitHub pre-releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,7 +88,26 @@ jobs:
           jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
             tag=$(jq -r '.tag' <<< "$entry")
             changelog=$(jq -r '.changelog' <<< "$entry")
-            gh release create "$tag" --notes-file "$changelog" --prerelease
+            artifactsDir=$(jq -r '.artifactsDir' <<< "$entry")
+            assets=()
+            if [ -n "$artifactsDir" ] && [ -d "$artifactsDir" ]; then
+              while IFS= read -r -d '' f; do assets+=("$f"); done < <(find "$artifactsDir" -maxdepth 1 -type f -name '*.jar' -print0)
+            fi
+            gh release create "$tag" --notes-file "$changelog" --prerelease "${assets[@]}"
+          done
+
+      # supersededTags lists this cycle's previous RC tags the one just created replaces (see
+      # releaseCandidates { } and issue #6) - only the GitHub Release gets deleted, the tag and its
+      # already-published package are left alone (gh release delete without --cleanup-tag never
+      # touches the tag). Tolerant of a release that's already gone (e.g. deleted manually, or a
+      # previous run failed after tagging but before creating it) - this is cleanup, not a required
+      # step, so it warns rather than failing the job.
+      - name: Delete superseded release-candidate pre-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          jq -r '.[] | .supersededTags[]' build/release-manifest.json | while IFS= read -r tag; do
+            gh release delete "$tag" --yes || echo "::warning::could not delete superseded release $tag (already gone?)"
           done
 
       - name: Publish package
