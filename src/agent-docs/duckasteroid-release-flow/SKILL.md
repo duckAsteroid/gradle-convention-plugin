@@ -42,12 +42,17 @@ apply the plugin.
   (`VersionResolver`, using that project's own `tagPrefix`/`modulePath`), skips any project whose
   candidate equals its last-final version (nothing qualifying changed under its own directory),
   and for every project that *does* qualify: generates its changelog, mints and pushes its own RC
-  tag, and records `{module, tag, changelog, supersededTags}` in `build/release-manifest.json` at
-  the repo root. A push touching one module produces one manifest entry; a push touching several
-  produces several, each versioned independently; a push with no qualifying commits anywhere
-  produces an empty manifest (not an error). `supersededTags` — see `releaseCandidates { }` below
-  — lists this cycle's previous RC tags that the new one replaces, for the bundled workflow to
-  delete their GitHub Releases.
+  tag, and records `{module, tag, changelog, supersededTags, artifactsDir}` in
+  `build/release-manifest.json` at the repo root. A push touching one module produces one manifest
+  entry; a push touching several produces several, each versioned independently; a push with no
+  qualifying commits anywhere produces an empty manifest (not an error). `supersededTags` — see
+  `releaseCandidates { }` below — lists this cycle's previous RC tags that the new one replaces, for
+  the bundled workflow to delete their GitHub Releases. `artifactsDir` is that project's own
+  `build/libs` directory (relative to the repo root) for the bundled workflow to glob jars out of and
+  attach to the GitHub Release — a directory to glob rather than literal file names, since the real
+  jar/sources/javadoc file names for the release version don't exist yet when the manifest is
+  written (`project.version` was already fixed to an ordinary "-SNAPSHOT" value earlier in the same
+  invocation, before the tag existed) — see issue #10.
 - **`promoteReleaseCandidates`** — the `main`-push counterpart. Same enumeration, but promotes
   each applying project's nearest reachable RC tag to final; a project with no pending RC this
   cycle is skipped rather than failing the whole task.
@@ -157,11 +162,15 @@ workflow files below into `.github/workflows/` — re-run it after upgrading the
 template changes.
 
 - On push to `release`: `tagReleaseCandidates` (generates each qualifying project's changelog and
-  mints its RC tag internally, no separate changelog step needed first), then one GitHub
-  pre-release per `build/release-manifest.json` entry, then one `gh release delete` per tag in
-  each entry's `supersededTags` (see `releaseCandidates { }` above), then `publish`.
-- On push to `main`: `promoteReleaseCandidates` (same internal changelog generation), then one
-  GitHub release per manifest entry, then `publish`.
+  mints its RC tag internally, no separate changelog step needed first), then `./gradlew assemble`
+  in a fresh invocation (so the rebuilt jars carry the just-tagged release version, not the ordinary
+  "-SNAPSHOT" one `tagReleaseCandidates` itself saw), then one GitHub pre-release per
+  `build/release-manifest.json` entry — attaching every jar found under that entry's `artifactsDir` —
+  then one `gh release delete` per tag in each entry's `supersededTags` (see `releaseCandidates { }`
+  above), then `publish`.
+- On push to `main`: `promoteReleaseCandidates` (same internal changelog generation), then
+  `./gradlew assemble` again for the same reason, then one GitHub release per manifest entry (same
+  artifact attachment), then `publish`.
 
 Both jobs should be self-contained (tag-then-publish in one job) — a tag pushed with the default
 `GITHUB_TOKEN` does not trigger other workflow runs, so a separate publish-on-tag workflow would

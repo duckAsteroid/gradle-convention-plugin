@@ -67,6 +67,28 @@ public class ReleaseManifestTest {
   }
 
   @Test
+  void addWithoutArtifactsDirDefaultsToAnEmptyString() {
+    ReleaseManifest manifest = new ReleaseManifest();
+    manifest.add(":", "v1.0.1-RC1", "build/changelog.md");
+
+    String json = manifest.toJson();
+    assertTrue(json.contains("\"artifactsDir\""), "artifactsDir key should always be present");
+    assertTrue(
+        json.indexOf("\"supersededTags\"") < json.indexOf("\"artifactsDir\""),
+        "artifactsDir key should come after supersededTags");
+    assertTrue(json.replaceAll("\\s+", "").contains("\"artifactsDir\":\"\""));
+  }
+
+  @Test
+  void addWithArtifactsDirSerializesItAsAString() {
+    ReleaseManifest manifest = new ReleaseManifest();
+    manifest.add(":api", "api/v1.4.1-RC1", "api/build/changelog.md", List.of(), "api/build/libs");
+
+    String json = manifest.toJson().replaceAll("\\s+", "");
+    assertTrue(json.contains("\"artifactsDir\":\"api/build/libs\""));
+  }
+
+  @Test
   void writeToCreatesParentDirectoriesAndWritesJson(@TempDir Path tempDir) throws IOException {
     ReleaseManifest manifest = new ReleaseManifest();
     manifest.add(":", "v1.0.1-RC1", "build/changelog.md");
